@@ -135,8 +135,18 @@
             font-size: 14px;
             width: 100px;
         }
-        .form-group input:focus {
+        .form-group input:focus, .form-group select:focus {
             outline: 2px solid #4ecca3;
+        }
+        .form-group select {
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            background: #0f3460;
+            color: #eee;
+            font-size: 14px;
+            width: 120px;
+            cursor: pointer;
         }
         .form-group.wide input {
             width: 200px;
@@ -327,7 +337,10 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label>Unit</label>
-                        <input type="text" id="new-unit" placeholder="g" value="g">
+                        <select id="new-unit" onchange="onUnitChange()">
+                            <option value="g">per 100g</option>
+                            <option value="item">per item</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label>Calories</label>
@@ -376,6 +389,7 @@
         let currentSearch = '';
 
         let currentItemName = '';
+        let currentSuggestion = null;
 
         async function startAddItem() {
             const name = document.getElementById('search-input').value.trim();
@@ -385,6 +399,7 @@
             }
 
             currentItemName = name;
+            currentSuggestion = null;
             document.getElementById('new-item-name').textContent = name;
             clearAddForm();
 
@@ -402,31 +417,26 @@
                 });
 
                 const data = await res.json();
+                currentSuggestion = data;
                 const confidence = data.confidence || 0;
                 const pct = Math.round(confidence * 100);
 
                 if (confidence >= 0.7) {
                     // High confidence - fill in the values
-                    document.getElementById('new-unit').value = data.default_unit || 'g';
-                    document.getElementById('new-calories').value = Math.round(data.calories || 0);
-                    document.getElementById('new-protein').value = (data.protein || 0).toFixed(1);
-                    document.getElementById('new-carbs').value = (data.carbs || 0).toFixed(1);
-                    document.getElementById('new-fat').value = (data.fat || 0).toFixed(1);
-                    document.getElementById('new-fiber').value = (data.fiber || 0).toFixed(1);
-                    document.getElementById('new-alcohol').value = (data.alcohol || 0).toFixed(1);
-                    setSuggestStatus(`Found! (${pct}% confidence) - Values per 100${data.default_unit || 'g'}. Edit if needed.`, 'success');
+                    const unit = data.recommended_unit || 'g';
+                    document.getElementById('new-unit').value = unit;
+                    fillFormWithUnit(unit);
+                    const unitLabel = unit === 'item' ? 'per item' : 'per 100g';
+                    setSuggestStatus(`Found! (${pct}% confidence) - Values ${unitLabel}. Change unit or edit if needed.`, 'success');
                 } else if (confidence >= 0.4) {
                     // Medium confidence - fill but warn
-                    document.getElementById('new-unit').value = data.default_unit || 'g';
-                    document.getElementById('new-calories').value = Math.round(data.calories || 0);
-                    document.getElementById('new-protein').value = (data.protein || 0).toFixed(1);
-                    document.getElementById('new-carbs').value = (data.carbs || 0).toFixed(1);
-                    document.getElementById('new-fat').value = (data.fat || 0).toFixed(1);
-                    document.getElementById('new-fiber').value = (data.fiber || 0).toFixed(1);
-                    document.getElementById('new-alcohol').value = (data.alcohol || 0).toFixed(1);
+                    const unit = data.recommended_unit || 'g';
+                    document.getElementById('new-unit').value = unit;
+                    fillFormWithUnit(unit);
                     setSuggestStatus(`Uncertain match (${pct}% confidence) - Please verify values.`, 'warning');
                 } else {
                     // Low confidence - don't fill
+                    document.getElementById('new-unit').value = 'g';
                     setSuggestStatus('Unknown item - please enter nutrition values manually.', 'warning');
                 }
             } catch (e) {
@@ -434,9 +444,43 @@
             }
         }
 
+        function fillFormWithUnit(unit) {
+            if (!currentSuggestion) return;
+
+            let values;
+            if (unit === 'item' && currentSuggestion.per_item) {
+                values = currentSuggestion.per_item;
+            } else {
+                values = currentSuggestion.per_100g;
+            }
+
+            if (values) {
+                document.getElementById('new-calories').value = Math.round(values.calories || 0);
+                document.getElementById('new-protein').value = (values.protein || 0).toFixed(1);
+                document.getElementById('new-carbs').value = (values.carbs || 0).toFixed(1);
+                document.getElementById('new-fat').value = (values.fat || 0).toFixed(1);
+                document.getElementById('new-fiber').value = (values.fiber || 0).toFixed(1);
+                document.getElementById('new-alcohol').value = (values.alcohol || 0).toFixed(1);
+            }
+        }
+
+        function onUnitChange() {
+            const unit = document.getElementById('new-unit').value;
+            if (currentSuggestion) {
+                if (unit === 'item' && !currentSuggestion.per_item) {
+                    setSuggestStatus('No per-item data available. Values kept from per 100g.', 'warning');
+                } else {
+                    fillFormWithUnit(unit);
+                    const unitLabel = unit === 'item' ? 'per item' : 'per 100g';
+                    setSuggestStatus(`Showing values ${unitLabel}. Edit if needed.`, 'success');
+                }
+            }
+        }
+
         function hideAddForm() {
             document.getElementById('add-form').classList.remove('show');
             currentItemName = '';
+            currentSuggestion = null;
         }
 
         function clearSuggestStatus() {
