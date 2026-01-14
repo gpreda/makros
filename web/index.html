@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Makros - Nutrition Tracker</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #4ecca3;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            margin-bottom: 15px;
+            color: #4ecca3;
+            font-size: 1.2em;
+        }
+        .day-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+        .day-nav h2 {
+            margin-bottom: 0;
+            flex: 1;
+            text-align: center;
+        }
+        .day-nav-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        .nav-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 0;
+            padding: 0;
+        }
+        .nav-btn:hover {
+            background: #1a4a7a;
+        }
+        .nav-btn:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
+        .today-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 0;
+        }
+        .today-btn:hover {
+            background: #1a4a7a;
+        }
+        .today-btn.hidden {
+            visibility: hidden;
+        }
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #eee;
+            font-size: 16px;
+            resize: vertical;
+            min-height: 80px;
+        }
+        textarea:focus {
+            outline: 2px solid #4ecca3;
+        }
+        button {
+            background: #4ecca3;
+            color: #1a1a2e;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #3db892;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        button.secondary {
+            background: #0f3460;
+            color: #4ecca3;
+        }
+        button.secondary:hover {
+            background: #1a4a7a;
+        }
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #0f3460;
+        }
+        th {
+            color: #4ecca3;
+            font-weight: 600;
+        }
+        tr.totals {
+            font-weight: 600;
+            border-top: 2px solid #4ecca3;
+        }
+        tr.totals td {
+            color: #4ecca3;
+        }
+        .daily-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 15px;
+        }
+        .stat-box {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-box .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #4ecca3;
+        }
+        .stat-box .label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        .meal-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .meal-item {
+            background: #0f3460;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .meal-item .desc {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-right: 15px;
+        }
+        .meal-item .macros {
+            font-size: 14px;
+            color: #888;
+        }
+        .meal-item .time {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        .meal-item .right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .delete-btn {
+            background: transparent;
+            color: #666;
+            border: none;
+            padding: 4px 8px;
+            margin: 0;
+            font-size: 18px;
+            cursor: pointer;
+            border-radius: 4px;
+            line-height: 1;
+        }
+        .delete-btn:hover {
+            background: #ff4757;
+            color: white;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #888;
+        }
+        .error {
+            background: #ff4757;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+        @media (max-width: 600px) {
+            th, td {
+                padding: 6px 4px;
+                font-size: 14px;
+            }
+            .day-nav h2 {
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Makros</h1>
+
+        <!-- Daily Summary with Navigation -->
+        <div class="card">
+            <div class="day-nav">
+                <div class="day-nav-buttons">
+                    <button class="nav-btn" onclick="prevDay()" title="Previous day">&larr;</button>
+                </div>
+                <h2 id="day-title">Today</h2>
+                <div class="day-nav-buttons">
+                    <button class="nav-btn" id="next-btn" onclick="nextDay()" title="Next day">&rarr;</button>
+                    <button class="today-btn" id="today-btn" onclick="goToToday()">Today</button>
+                </div>
+            </div>
+            <div class="daily-summary" id="daily-summary">
+                <div class="stat-box">
+                    <div class="value" id="daily-calories">-</div>
+                    <div class="label">Calories</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="daily-protein">-</div>
+                    <div class="label">Protein (g)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="daily-carbs">-</div>
+                    <div class="label">Carbs (g)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="daily-fat">-</div>
+                    <div class="label">Fat (g)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="daily-fiber">-</div>
+                    <div class="label">Fiber (g)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" id="daily-alcohol">-</div>
+                    <div class="label">Alcohol (g)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analyze Meal -->
+        <div class="card" id="analyze-card">
+            <h2>Log Meal</h2>
+            <textarea id="meal-input" placeholder="Describe your meal, e.g.: 4 eggs, 50g cheese, 2 slices of bread with butter"></textarea>
+            <button id="analyze-btn" onclick="analyzeMeal()">Analyze</button>
+
+            <div id="analysis-result" class="hidden">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>Amount</th>
+                            <th>Kcal</th>
+                            <th>P</th>
+                            <th>C</th>
+                            <th>F</th>
+                            <th>Alc</th>
+                        </tr>
+                    </thead>
+                    <tbody id="analysis-table"></tbody>
+                </table>
+                <div class="btn-row">
+                    <button onclick="logMeal()">Log Meal</button>
+                    <button class="secondary" onclick="clearAnalysis()">Clear</button>
+                </div>
+            </div>
+
+            <div id="analysis-loading" class="loading hidden">Analyzing...</div>
+            <div id="analysis-error" class="error hidden"></div>
+        </div>
+
+        <!-- Meals for Selected Day -->
+        <div class="card">
+            <h2>Meals</h2>
+            <div class="meal-list" id="meal-list">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Full Day Breakdown -->
+        <div class="card" id="breakdown-card">
+            <h2>Full Breakdown</h2>
+            <div id="breakdown-content">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentAnalysis = null;
+        let currentDescription = '';
+        let currentDate = new Date();
+
+        function getDateString(date) {
+            // Use local date components to avoid UTC timezone shift
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function isToday(date) {
+            const today = new Date();
+            return getDateString(date) === getDateString(today);
+        }
+
+        function formatDateTitle(date) {
+            if (isToday(date)) return 'Today';
+
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            if (getDateString(date) === getDateString(yesterday)) return 'Yesterday';
+
+            const options = { weekday: 'short', month: 'short', day: 'numeric' };
+            return date.toLocaleDateString('en-US', options);
+        }
+
+        function updateDayNav() {
+            document.getElementById('day-title').textContent = formatDateTitle(currentDate);
+
+            // Hide/show Today button
+            const todayBtn = document.getElementById('today-btn');
+            if (isToday(currentDate)) {
+                todayBtn.classList.add('hidden');
+            } else {
+                todayBtn.classList.remove('hidden');
+            }
+
+            // Disable next button if on today
+            const nextBtn = document.getElementById('next-btn');
+            nextBtn.disabled = isToday(currentDate);
+
+            // Show/hide analyze card (only show for today)
+            const analyzeCard = document.getElementById('analyze-card');
+            if (isToday(currentDate)) {
+                analyzeCard.classList.remove('hidden');
+            } else {
+                analyzeCard.classList.add('hidden');
+            }
+        }
+
+        function prevDay() {
+            currentDate.setDate(currentDate.getDate() - 1);
+            updateDayNav();
+            loadData();
+        }
+
+        function nextDay() {
+            if (!isToday(currentDate)) {
+                currentDate.setDate(currentDate.getDate() + 1);
+                updateDayNav();
+                loadData();
+            }
+        }
+
+        function goToToday() {
+            currentDate = new Date();
+            updateDayNav();
+            loadData();
+        }
+
+        async function loadDailySummary() {
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/daily?date=${dateStr}`);
+                const data = await res.json();
+                document.getElementById('daily-calories').textContent = Math.round(data.calories);
+                document.getElementById('daily-protein').textContent = Math.round(data.protein);
+                document.getElementById('daily-carbs').textContent = Math.round(data.carbs);
+                document.getElementById('daily-fat').textContent = Math.round(data.fat);
+                document.getElementById('daily-fiber').textContent = Math.round(data.fiber);
+                document.getElementById('daily-alcohol').textContent = Math.round(data.alcohol || 0);
+            } catch (e) {
+                console.error('Failed to load daily summary:', e);
+            }
+        }
+
+        async function loadMeals() {
+            const list = document.getElementById('meal-list');
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/meals?limit=50&date=${dateStr}`);
+                const data = await res.json();
+
+                if (data.meals.length === 0) {
+                    list.innerHTML = '<div class="loading">No meals logged</div>';
+                    return;
+                }
+
+                list.innerHTML = data.meals.map(meal => {
+                    const time = new Date(meal.logged_at).toLocaleTimeString('en-US', {
+                        hour: 'numeric',
+                        minute: '2-digit'
+                    });
+                    return `
+                        <div class="meal-item">
+                            <div>
+                                <div class="desc">${escapeHtml(meal.description)}</div>
+                                <div class="time">${time}</div>
+                            </div>
+                            <div class="right">
+                                <div class="macros">${meal.total_calories} kcal</div>
+                                <button class="delete-btn" onclick="deleteMeal(${meal.id})" title="Delete meal">&times;</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                list.innerHTML = '<div class="error">Failed to load meals</div>';
+            }
+        }
+
+        async function loadBreakdown() {
+            const content = document.getElementById('breakdown-content');
+            const card = document.getElementById('breakdown-card');
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/daily/breakdown?date=${dateStr}`);
+                const data = await res.json();
+
+                if (data.items.length === 0) {
+                    card.classList.add('hidden');
+                    return;
+                }
+
+                card.classList.remove('hidden');
+
+                // Calculate totals
+                const totals = data.items.reduce((acc, item) => {
+                    acc.calories += item.calories || 0;
+                    acc.protein += item.protein || 0;
+                    acc.carbs += item.carbs || 0;
+                    acc.fat += item.fat || 0;
+                    acc.fiber += item.fiber || 0;
+                    acc.alcohol += item.alcohol || 0;
+                    return acc;
+                }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0});
+
+                const rows = data.items.map(item => `
+                    <tr>
+                        <td>${escapeHtml(item.name)}</td>
+                        <td>${item.amount} ${item.unit}</td>
+                        <td>${item.calories || 0}</td>
+                        <td>${(item.protein || 0).toFixed(1)}</td>
+                        <td>${(item.carbs || 0).toFixed(1)}</td>
+                        <td>${(item.fat || 0).toFixed(1)}</td>
+                        <td>${(item.fiber || 0).toFixed(1)}</td>
+                        <td>${(item.alcohol || 0).toFixed(1)}</td>
+                    </tr>
+                `).join('');
+
+                const totalsRow = `
+                    <tr class="totals">
+                        <td colspan="2">Total</td>
+                        <td>${Math.round(totals.calories)}</td>
+                        <td>${totals.protein.toFixed(1)}</td>
+                        <td>${totals.carbs.toFixed(1)}</td>
+                        <td>${totals.fat.toFixed(1)}</td>
+                        <td>${totals.fiber.toFixed(1)}</td>
+                        <td>${totals.alcohol.toFixed(1)}</td>
+                    </tr>
+                `;
+
+                content.innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Amount</th>
+                                <th>Kcal</th>
+                                <th>P</th>
+                                <th>C</th>
+                                <th>F</th>
+                                <th>Fiber</th>
+                                <th>Alc</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}${totalsRow}</tbody>
+                    </table>
+                `;
+            } catch (e) {
+                content.innerHTML = '<div class="error">Failed to load breakdown</div>';
+            }
+        }
+
+        function loadData() {
+            loadDailySummary();
+            loadMeals();
+            loadBreakdown();
+        }
+
+        async function analyzeMeal() {
+            const input = document.getElementById('meal-input');
+            const description = input.value.trim();
+            if (!description) return;
+
+            const btn = document.getElementById('analyze-btn');
+            const loading = document.getElementById('analysis-loading');
+            const error = document.getElementById('analysis-error');
+            const result = document.getElementById('analysis-result');
+
+            btn.disabled = true;
+            loading.classList.remove('hidden');
+            error.classList.add('hidden');
+            result.classList.add('hidden');
+
+            try {
+                const res = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({description})
+                });
+
+                if (!res.ok) throw new Error('Analysis failed');
+
+                const data = await res.json();
+                currentAnalysis = data;
+                currentDescription = description;
+                renderAnalysis(data);
+                result.classList.remove('hidden');
+            } catch (e) {
+                error.textContent = 'Failed to analyze meal. Please try again.';
+                error.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                loading.classList.add('hidden');
+            }
+        }
+
+        function renderAnalysis(data) {
+            const tbody = document.getElementById('analysis-table');
+            const rows = data.items.map(item => `
+                <tr>
+                    <td>${escapeHtml(item.name)}</td>
+                    <td>${item.amount} ${item.unit}</td>
+                    <td>${item.calories}</td>
+                    <td>${item.protein.toFixed(1)}</td>
+                    <td>${item.carbs.toFixed(1)}</td>
+                    <td>${item.fat.toFixed(1)}</td>
+                    <td>${(item.alcohol || 0).toFixed(1)}</td>
+                </tr>
+            `).join('');
+
+            const totals = data.totals;
+            const totalsRow = `
+                <tr class="totals">
+                    <td colspan="2">Total</td>
+                    <td>${totals.calories}</td>
+                    <td>${totals.protein.toFixed(1)}</td>
+                    <td>${totals.carbs.toFixed(1)}</td>
+                    <td>${totals.fat.toFixed(1)}</td>
+                    <td>${(totals.alcohol || 0).toFixed(1)}</td>
+                </tr>
+            `;
+
+            tbody.innerHTML = rows + totalsRow;
+        }
+
+        async function logMeal() {
+            if (!currentAnalysis) return;
+
+            try {
+                const res = await fetch('/api/meals', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        description: currentDescription,
+                        items: currentAnalysis.items,
+                        totals: currentAnalysis.totals
+                    })
+                });
+
+                if (!res.ok) throw new Error('Failed to log meal');
+
+                clearAnalysis();
+                loadData();
+            } catch (e) {
+                alert('Failed to log meal');
+            }
+        }
+
+        function clearAnalysis() {
+            currentAnalysis = null;
+            currentDescription = '';
+            document.getElementById('meal-input').value = '';
+            document.getElementById('analysis-result').classList.add('hidden');
+            document.getElementById('analysis-error').classList.add('hidden');
+        }
+
+        async function deleteMeal(mealId) {
+            if (!confirm('Delete this meal?')) return;
+
+            try {
+                const res = await fetch(`/api/meals/${mealId}`, {method: 'DELETE'});
+                if (!res.ok) throw new Error('Failed to delete');
+                loadData();
+            } catch (e) {
+                alert('Failed to delete meal');
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Handle Enter key in textarea
+        document.getElementById('meal-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                analyzeMeal();
+            }
+        });
+
+        // Initial load
+        updateDayNav();
+        loadData();
+    </script>
+</body>
+</html>
