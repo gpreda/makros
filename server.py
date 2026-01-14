@@ -410,6 +410,51 @@ async def get_daily_breakdown(date: Optional[str] = None):
     return {"items": items}
 
 
+# Weight endpoints
+class WeightRequest(BaseModel):
+    weight_lbs: float
+
+
+@app.get("/api/weight")
+async def get_weight(date: Optional[str] = None):
+    """Get weight for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+    weight = get_storage().get_weight(dt)
+    return {"weight_lbs": weight}
+
+
+@app.post("/api/weight")
+async def set_weight(request: WeightRequest, date: Optional[str] = None):
+    """Set weight for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+    get_storage().set_weight(request.weight_lbs, dt)
+    return {"message": "Weight saved", "weight_lbs": request.weight_lbs}
+
+
+@app.delete("/api/weight")
+async def delete_weight(date: Optional[str] = None):
+    """Delete weight for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+    if get_storage().delete_weight(dt):
+        return {"message": "Weight deleted"}
+    raise HTTPException(status_code=404, detail="No weight found for this date")
+
+
 # Item management endpoints
 @app.get("/api/items")
 async def list_items(limit: int = 100, offset: int = 0, search: Optional[str] = None):

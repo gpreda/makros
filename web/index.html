@@ -200,6 +200,46 @@
             color: #888;
             margin-top: 5px;
         }
+        .weight-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #0f3460;
+        }
+        .weight-label {
+            color: #888;
+            font-size: 14px;
+        }
+        .weight-row input {
+            width: 80px;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 6px;
+            background: #0f3460;
+            color: #4ecca3;
+            font-size: 16px;
+            font-weight: 600;
+            text-align: center;
+        }
+        .weight-row input:focus {
+            outline: 2px solid #4ecca3;
+        }
+        .weight-unit {
+            color: #888;
+            font-size: 14px;
+        }
+        .weight-save-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 8px 16px;
+            font-size: 14px;
+            margin-top: 0;
+        }
+        .weight-save-btn:hover {
+            background: #1a4a7a;
+        }
         .meal-list {
             max-height: 400px;
             overflow-y: auto;
@@ -323,6 +363,12 @@
                     <div class="value" id="daily-alcohol">-</div>
                     <div class="label">Alcohol (g)</div>
                 </div>
+            </div>
+            <div class="weight-row">
+                <span class="weight-label">Morning Weight:</span>
+                <input type="number" id="weight-input" placeholder="--" step="0.1" min="0">
+                <span class="weight-unit">lbs</span>
+                <button class="weight-save-btn" onclick="saveWeight()">Save</button>
             </div>
         </div>
 
@@ -463,6 +509,44 @@
             }
         }
 
+        async function loadWeight() {
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/weight?date=${dateStr}`);
+                const data = await res.json();
+                const input = document.getElementById('weight-input');
+                if (data.weight_lbs) {
+                    input.value = data.weight_lbs.toFixed(1);
+                } else {
+                    input.value = '';
+                }
+            } catch (e) {
+                console.error('Failed to load weight:', e);
+            }
+        }
+
+        async function saveWeight() {
+            const input = document.getElementById('weight-input');
+            const weight = parseFloat(input.value);
+
+            if (!weight || weight <= 0) {
+                alert('Please enter a valid weight');
+                return;
+            }
+
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/weight?date=${dateStr}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({weight_lbs: weight})
+                });
+                if (!res.ok) throw new Error('Failed to save');
+            } catch (e) {
+                alert('Failed to save weight');
+            }
+        }
+
         async function loadMeals() {
             const list = document.getElementById('meal-list');
             try {
@@ -578,6 +662,7 @@
 
         function loadData() {
             loadDailySummary();
+            loadWeight();
             loadMeals();
             loadBreakdown();
         }

@@ -152,6 +152,21 @@ class PostgresStorage:
                 ON meal_items(meal_id)
             """)
 
+            # Daily weights table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS daily_weights (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL UNIQUE,
+                    weight_lbs REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_daily_weights_date
+                ON daily_weights(date)
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -392,6 +407,45 @@ class PostgresStorage:
         """Delete a meal. Returns True if deleted."""
         with self.conn.cursor() as cur:
             cur.execute("DELETE FROM meals WHERE id = %s", (meal_id,))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
+
+    # Weight operations
+    def get_weight(self, date: Optional[datetime] = None) -> Optional[float]:
+        """Get weight for a specific date. Returns weight in lbs or None."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT weight_lbs FROM daily_weights WHERE date = DATE(%s)",
+                (date,)
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def set_weight(self, weight_lbs: float, date: Optional[datetime] = None) -> None:
+        """Set weight for a specific date. Updates if exists, inserts if not."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO daily_weights (date, weight_lbs)
+                VALUES (DATE(%s), %s)
+                ON CONFLICT (date)
+                DO UPDATE SET weight_lbs = %s, updated_at = CURRENT_TIMESTAMP
+            """, (date, weight_lbs, weight_lbs))
+        self.conn.commit()
+
+    def delete_weight(self, date: Optional[datetime] = None) -> bool:
+        """Delete weight for a specific date. Returns True if deleted."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM daily_weights WHERE date = DATE(%s)", (date,))
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
