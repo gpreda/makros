@@ -412,6 +412,80 @@ async def list_items(limit: int = 100, offset: int = 0, search: Optional[str] = 
     return {"items": [i.to_dict() for i in items], "total": get_storage().count_items()}
 
 
+class ItemSuggestRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/items/suggest")
+async def suggest_item_macros(request: ItemSuggestRequest):
+    """Suggest macros for an item name using AI."""
+    client = get_genai_client()
+
+    prompt = f"""
+Analyze this food item and provide nutritional information per 100g:
+
+Item: "{request.name}"
+
+You must determine if this is a recognizable food item with known nutritional values.
+
+Respond with ONLY a Python dictionary in this exact format:
+{{
+    'confidence': 0.95,  # Float 0-1: How confident you are this is a real food with known nutrition
+    'recognized': True,  # Boolean: Is this a recognizable food item?
+    'default_unit': 'g',  # Suggested default unit (g, ml, item, serving, etc.)
+    'calories': 250,     # kcal per 100g (or per item if default_unit is 'item')
+    'protein': 10.0,     # grams per 100g
+    'carbs': 30.0,       # grams per 100g
+    'fat': 8.0,          # grams per 100g
+    'fiber': 2.0,        # grams per 100g
+    'alcohol': 0.0       # grams per 100g
+}}
+
+Confidence guidelines:
+- 0.9-1.0: Common foods with well-known nutrition (chicken breast, apple, rice)
+- 0.7-0.9: Less common but identifiable foods (specific brands, regional foods)
+- 0.4-0.7: Vague items, made-up names, or items where nutrition varies widely
+- 0.0-0.4: Unrecognizable, non-food items, or completely made-up names
+
+If confidence is below 0.5, set all nutritional values to 0.
+Return ONLY the dictionary, no other text.
+"""
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=prompt
+        )
+        text = response.text.strip()
+        text = text.replace('```python', '').replace('```', '').strip()
+        result = ast.literal_eval(text)
+
+        return {
+            'confidence': result.get('confidence', 0),
+            'recognized': result.get('recognized', False),
+            'default_unit': result.get('default_unit', 'g'),
+            'calories': result.get('calories', 0),
+            'protein': result.get('protein', 0),
+            'carbs': result.get('carbs', 0),
+            'fat': result.get('fat', 0),
+            'fiber': result.get('fiber', 0),
+            'alcohol': result.get('alcohol', 0),
+        }
+    except Exception as e:
+        # Return empty suggestion on error
+        return {
+            'confidence': 0,
+            'recognized': False,
+            'default_unit': 'g',
+            'calories': 0,
+            'protein': 0,
+            'carbs': 0,
+            'fat': 0,
+            'fiber': 0,
+            'alcohol': 0,
+        }
+
+
 @app.post("/api/items")
 async def create_item(request: ItemCreate):
     """Create a new item."""
