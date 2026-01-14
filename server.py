@@ -258,14 +258,23 @@ async def analyze_meal(request: AnalyzeRequest):
 
     units_list = ', '.join(VALID_UNITS)
     prompt = f"""
-Analyze this meal and provide a detailed nutritional breakdown:
+Analyze this meal and provide a nutritional breakdown:
 
 Meal: "{request.description}"
 
-For each ingredient/item in the meal, provide:
-- name: ingredient name (string)
-- amount: numeric quantity (float)
-- unit: one of [{units_list}]
+IMPORTANT - Item granularity rules:
+- Keep well-defined products as SINGLE items. Do NOT break them into components:
+  - Restaurant/fast food items: "McDonald's Big Mac", "Starbucks latte", "Subway sandwich"
+  - Branded products: "Snickers bar", "Coca-Cola", "Kind bar"
+  - Complete dishes: "Caesar salad", "pepperoni pizza slice", "chicken burrito"
+- Only break down into ingredients for homemade/generic descriptions:
+  - "eggs with toast and butter" -> 3 separate items
+  - "chicken rice and vegetables" -> 3 separate items
+
+For each item, provide:
+- name: item name (string) - use the product name for branded items
+- amount: numeric quantity (float) - use 1 for single items like burgers
+- unit: one of [{units_list}] - use 'item' for countable products
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -276,7 +285,7 @@ For each ingredient/item in the meal, provide:
 Respond with ONLY a Python dictionary in this exact format:
 {{
     'items': [
-        {{'name': 'ingredient name', 'amount': 100.0, 'unit': 'g', 'calories': 123, 'protein': 12.5, 'carbs': 10.0, 'fat': 8.0, 'fiber': 1.0, 'alcohol': 0.0}},
+        {{'name': 'McDonald\\'s Double Cheeseburger', 'amount': 1, 'unit': 'item', 'calories': 450, 'protein': 25.0, 'carbs': 34.0, 'fat': 24.0, 'fiber': 2.0, 'alcohol': 0.0}},
         ...
     ],
     'totals': {{'calories': 456, 'protein': 25.0, 'carbs': 30.0, 'fat': 20.0, 'fiber': 3.0, 'alcohol': 0.0}}
