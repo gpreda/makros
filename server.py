@@ -455,6 +455,22 @@ async def delete_weight(date: Optional[str] = None):
     raise HTTPException(status_code=404, detail="No weight found for this date")
 
 
+@app.get("/api/weight/history")
+async def get_weight_history(days: Optional[int] = None):
+    """Get weight history. Pass days=30, 90, 365 or omit for all."""
+    history = get_storage().get_weight_history(days)
+    return {"history": history}
+
+
+@app.get("/weight")
+async def weight_page():
+    """Serve weight chart page."""
+    weight_path = WEB_DIR / "weight.html"
+    if weight_path.exists():
+        return FileResponse(weight_path)
+    return {"message": "Weight page not found"}
+
+
 # Item management endpoints
 @app.get("/api/items")
 async def list_items(limit: int = 100, offset: int = 0, search: Optional[str] = None):

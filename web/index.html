@@ -240,6 +240,19 @@
         .weight-save-btn:hover {
             background: #1a4a7a;
         }
+        .weight-chart-link {
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            margin-left: auto;
+        }
+        .weight-chart-link:hover {
+            background: #1a4a7a;
+        }
         .meal-list {
             max-height: 400px;
             overflow-y: auto;
@@ -369,6 +382,7 @@
                 <input type="number" id="weight-input" placeholder="--" step="0.1" min="0">
                 <span class="weight-unit">lbs</span>
                 <button class="weight-save-btn" onclick="saveWeight()">Save</button>
+                <a href="/weight" class="weight-chart-link" title="View weight chart">Chart</a>
             </div>
         </div>
 

@@ -449,3 +449,21 @@ class PostgresStorage:
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
+
+    def get_weight_history(self, days: Optional[int] = None) -> list[dict]:
+        """Get weight history. If days is None, returns all history."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if days:
+                cur.execute("""
+                    SELECT date, weight_lbs
+                    FROM daily_weights
+                    WHERE date >= CURRENT_DATE - INTERVAL '%s days'
+                    ORDER BY date ASC
+                """, (days,))
+            else:
+                cur.execute("""
+                    SELECT date, weight_lbs
+                    FROM daily_weights
+                    ORDER BY date ASC
+                """)
+            return [{'date': str(row['date']), 'weight_lbs': row['weight_lbs']} for row in cur.fetchall()]
