@@ -38,6 +38,13 @@ class ItemCreate(BaseModel):
     bar_code: Optional[str] = None
     description: Optional[str] = None
     unit_conversions: dict[str, float] = {}
+    default_unit: str = 'g'
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fat: Optional[float] = None
+    fiber: Optional[float] = None
+    alcohol: Optional[float] = None
 
 
 class ItemUpdate(BaseModel):
@@ -45,6 +52,13 @@ class ItemUpdate(BaseModel):
     bar_code: Optional[str] = None
     description: Optional[str] = None
     unit_conversions: Optional[dict[str, float]] = None
+    default_unit: Optional[str] = None
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fat: Optional[float] = None
+    fiber: Optional[float] = None
+    alcohol: Optional[float] = None
 
 
 # Initialize app
@@ -405,7 +419,14 @@ async def create_item(request: ItemCreate):
         name=request.name,
         bar_code=request.bar_code,
         description=request.description,
-        unit_conversions=request.unit_conversions
+        unit_conversions=request.unit_conversions,
+        default_unit=request.default_unit,
+        calories=request.calories,
+        protein=request.protein,
+        carbs=request.carbs,
+        fat=request.fat,
+        fiber=request.fiber,
+        alcohol=request.alcohol,
     )
     try:
         item = get_storage().add_item(item)
@@ -440,6 +461,20 @@ async def update_item(item_id: int, request: ItemUpdate):
         item.description = request.description
     if request.unit_conversions is not None:
         item.unit_conversions = request.unit_conversions
+    if request.default_unit is not None:
+        item.default_unit = request.default_unit
+    if request.calories is not None:
+        item.calories = request.calories
+    if request.protein is not None:
+        item.protein = request.protein
+    if request.carbs is not None:
+        item.carbs = request.carbs
+    if request.fat is not None:
+        item.fat = request.fat
+    if request.fiber is not None:
+        item.fiber = request.fiber
+    if request.alcohol is not None:
+        item.alcohol = request.alcohol
 
     get_storage().update_item(item)
     return item.to_dict()
