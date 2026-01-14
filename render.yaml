@@ -10,11 +10,4 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: DATABASE_URL
-        fromDatabase:
-          name: makros-db
-          property: connectionString
-
-databases:
-  - name: makros-db
-    plan: starter
-    databaseName: makros
+        sync: false
