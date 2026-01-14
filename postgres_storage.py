@@ -457,7 +457,7 @@ class PostgresStorage:
                 cur.execute("""
                     SELECT date, weight_lbs
                     FROM daily_weights
-                    WHERE date >= CURRENT_DATE - INTERVAL '%s days'
+                    WHERE date >= CURRENT_DATE - %s * INTERVAL '1 day'
                     ORDER BY date ASC
                 """, (days,))
             else:
