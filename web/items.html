@@ -150,6 +150,14 @@
             padding: 10px 20px;
             font-size: 14px;
         }
+        .add-form-header {
+            font-size: 16px;
+            margin-bottom: 10px;
+            color: #eee;
+        }
+        .add-form-header strong {
+            color: #4ecca3;
+        }
         .suggest-status {
             font-size: 13px;
             padding: 8px 0;
@@ -166,11 +174,6 @@
         }
         .suggest-status.error {
             color: #ff4757;
-        }
-        #lookup-btn {
-            padding: 10px 16px;
-            font-size: 14px;
-            white-space: nowrap;
         }
         /* Table */
         table {
@@ -308,31 +311,24 @@
 
         <div class="card">
             <div class="search-row">
-                <input type="text" id="search-input" placeholder="Search items by name...">
+                <input type="text" id="search-input" placeholder="Enter item name...">
                 <button onclick="searchItems()">Search</button>
-                <button class="btn-secondary" onclick="toggleAddForm()">+ Add Item</button>
+                <button class="btn-secondary" onclick="startAddItem()">+ Add Item</button>
             </div>
             <div class="stats" id="stats">
                 Loading...
             </div>
 
             <div class="add-form" id="add-form">
+                <div class="add-form-header">
+                    <span>Adding: </span><strong id="new-item-name"></strong>
+                </div>
+                <div class="suggest-status" id="suggest-status"></div>
                 <div class="form-row">
-                    <div class="form-group wide">
-                        <label>Name *</label>
-                        <input type="text" id="new-name" placeholder="Item name (press Enter to lookup)">
-                    </div>
-                    <div class="form-group">
-                        <label>&nbsp;</label>
-                        <button class="btn btn-secondary" id="lookup-btn" onclick="lookupItem()">Lookup</button>
-                    </div>
                     <div class="form-group">
                         <label>Unit</label>
                         <input type="text" id="new-unit" placeholder="g" value="g">
                     </div>
-                </div>
-                <div class="suggest-status" id="suggest-status"></div>
-                <div class="form-row">
                     <div class="form-group">
                         <label>Calories</label>
                         <input type="number" id="new-calories" placeholder="0" step="1">
@@ -360,7 +356,7 @@
                 </div>
                 <div class="form-buttons">
                     <button class="btn" onclick="addItem()">Save Item</button>
-                    <button class="btn btn-secondary" onclick="toggleAddForm()">Cancel</button>
+                    <button class="btn btn-secondary" onclick="hideAddForm()">Cancel</button>
                 </div>
             </div>
         </div>
@@ -379,38 +375,23 @@
         let totalItems = 0;
         let currentSearch = '';
 
-        function toggleAddForm() {
-            const form = document.getElementById('add-form');
-            form.classList.toggle('show');
-            if (form.classList.contains('show')) {
-                document.getElementById('new-name').focus();
-                clearSuggestStatus();
-            } else {
-                clearAddForm();
-            }
-        }
+        let currentItemName = '';
 
-        function clearSuggestStatus() {
-            const status = document.getElementById('suggest-status');
-            status.textContent = '';
-            status.className = 'suggest-status';
-        }
-
-        function setSuggestStatus(message, type) {
-            const status = document.getElementById('suggest-status');
-            status.textContent = message;
-            status.className = 'suggest-status ' + type;
-        }
-
-        async function lookupItem() {
-            const name = document.getElementById('new-name').value.trim();
+        async function startAddItem() {
+            const name = document.getElementById('search-input').value.trim();
             if (!name) {
-                setSuggestStatus('Enter an item name to lookup', 'warning');
+                alert('Enter an item name first');
                 return;
             }
 
-            const btn = document.getElementById('lookup-btn');
-            btn.disabled = true;
+            currentItemName = name;
+            document.getElementById('new-item-name').textContent = name;
+            clearAddForm();
+
+            const form = document.getElementById('add-form');
+            form.classList.add('show');
+
+            // Auto-lookup
             setSuggestStatus('Looking up...', 'loading');
 
             try {
@@ -450,20 +431,34 @@
                 }
             } catch (e) {
                 setSuggestStatus('Lookup failed - please enter values manually.', 'error');
-            } finally {
-                btn.disabled = false;
             }
         }
 
+        function hideAddForm() {
+            document.getElementById('add-form').classList.remove('show');
+            currentItemName = '';
+        }
+
+        function clearSuggestStatus() {
+            const status = document.getElementById('suggest-status');
+            status.textContent = '';
+            status.className = 'suggest-status';
+        }
+
+        function setSuggestStatus(message, type) {
+            const status = document.getElementById('suggest-status');
+            status.textContent = message;
+            status.className = 'suggest-status ' + type;
+        }
+
         async function addItem() {
-            const name = document.getElementById('new-name').value.trim();
-            if (!name) {
-                alert('Name is required');
+            if (!currentItemName) {
+                alert('No item name set');
                 return;
             }
 
             const item = {
-                name: name,
+                name: currentItemName,
                 default_unit: document.getElementById('new-unit').value.trim() || 'g',
                 calories: parseFloat(document.getElementById('new-calories').value) || 0,
                 protein: parseFloat(document.getElementById('new-protein').value) || 0,
@@ -486,8 +481,8 @@
                 }
 
                 // Clear form and reload
-                clearAddForm();
-                toggleAddForm();
+                hideAddForm();
+                document.getElementById('search-input').value = '';
                 loadItems(0, '');
             } catch (e) {
                 alert(e.message);
@@ -495,7 +490,6 @@
         }
 
         function clearAddForm() {
-            document.getElementById('new-name').value = '';
             document.getElementById('new-unit').value = 'g';
             document.getElementById('new-calories').value = '';
             document.getElementById('new-protein').value = '';
@@ -645,14 +639,6 @@
             if (e.key === 'Enter') {
                 e.preventDefault();
                 searchItems();
-            }
-        });
-
-        // Handle Enter key in new item name to trigger lookup
-        document.getElementById('new-name').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                lookupItem();
             }
         });
 
