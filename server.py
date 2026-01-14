@@ -126,6 +126,116 @@ async def items_page():
     return {"message": "Items page not found"}
 
 
+# Helper functions for item matching
+def normalize_macros(item_data: dict, amount: float) -> dict:
+    """Normalize macros to per-unit values (divide by amount)."""
+    if amount == 0:
+        return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0, 'fiber': 0, 'alcohol': 0}
+    return {
+        'calories': (item_data.get('calories') or 0) / amount,
+        'protein': (item_data.get('protein') or 0) / amount,
+        'carbs': (item_data.get('carbs') or 0) / amount,
+        'fat': (item_data.get('fat') or 0) / amount,
+        'fiber': (item_data.get('fiber') or 0) / amount,
+        'alcohol': (item_data.get('alcohol') or 0) / amount,
+    }
+
+
+def macros_match(macros1: dict, macros2: dict, tolerance: float = 0.1) -> bool:
+    """Check if two normalized macro profiles match within tolerance (10% by default)."""
+    for key in ['calories', 'protein', 'carbs', 'fat']:
+        v1 = macros1.get(key, 0)
+        v2 = macros2.get(key, 0)
+        # If both are near zero, consider them matching
+        if abs(v1) < 0.1 and abs(v2) < 0.1:
+            continue
+        # Use relative tolerance for larger values
+        max_val = max(abs(v1), abs(v2))
+        if max_val > 0 and abs(v1 - v2) / max_val > tolerance:
+            return False
+    return True
+
+
+def find_unique_name(storage, base_name: str) -> str:
+    """Find a unique name by appending a number if needed."""
+    # Check if base name with number pattern already exists
+    name = base_name
+    counter = 2
+    while storage.get_item_by_name(name):
+        name = f"{base_name} #{counter}"
+        counter += 1
+    return name
+
+
+def process_analyzed_items(items: list[dict]) -> list[dict]:
+    """Process analyzed items: check DB, save new items, handle duplicates."""
+    storage = get_storage()
+    processed_items = []
+
+    for item_data in items:
+        name = item_data.get('name', '').strip()
+        amount = item_data.get('amount', 1)
+        unit = item_data.get('unit', 'item')
+
+        if not name:
+            processed_items.append(item_data)
+            continue
+
+        # Normalize macros to per-unit values
+        new_macros = normalize_macros(item_data, amount)
+
+        # Check if item exists in DB
+        existing_item = storage.get_item_by_name(name)
+
+        if existing_item:
+            # Compare macros (existing item stores per-unit values)
+            existing_macros = {
+                'calories': existing_item.calories or 0,
+                'protein': existing_item.protein or 0,
+                'carbs': existing_item.carbs or 0,
+                'fat': existing_item.fat or 0,
+                'fiber': existing_item.fiber or 0,
+                'alcohol': existing_item.alcohol or 0,
+            }
+
+            if macros_match(new_macros, existing_macros):
+                # Same item, use existing - keep the analyzed data as-is
+                processed_items.append(item_data)
+            else:
+                # Different macros, create new item with unique name
+                unique_name = find_unique_name(storage, name)
+                new_item = Item(
+                    name=unique_name,
+                    default_unit=unit,
+                    calories=new_macros['calories'],
+                    protein=new_macros['protein'],
+                    carbs=new_macros['carbs'],
+                    fat=new_macros['fat'],
+                    fiber=new_macros['fiber'],
+                    alcohol=new_macros['alcohol'],
+                )
+                storage.add_item(new_item)
+                # Update the item data with new name
+                item_data['name'] = unique_name
+                processed_items.append(item_data)
+        else:
+            # New item, add to DB
+            new_item = Item(
+                name=name,
+                default_unit=unit,
+                calories=new_macros['calories'],
+                protein=new_macros['protein'],
+                carbs=new_macros['carbs'],
+                fat=new_macros['fat'],
+                fiber=new_macros['fiber'],
+                alcohol=new_macros['alcohol'],
+            )
+            storage.add_item(new_item)
+            processed_items.append(item_data)
+
+    return processed_items
+
+
 # Meal analysis endpoints
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze_meal(request: AnalyzeRequest):
@@ -171,8 +281,11 @@ Return ONLY the dictionary, no other text or markdown.
 
     try:
         result = ast.literal_eval(text)
+        items = result.get('items', [])
+        # Process items: check DB, save new items, handle name conflicts
+        processed_items = process_analyzed_items(items)
         return AnalyzeResponse(
-            items=result.get('items', []),
+            items=processed_items,
             totals=result.get('totals', {})
         )
     except (SyntaxError, ValueError) as e:
