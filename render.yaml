@@ -16,5 +16,5 @@ services:
 
 databases:
   - name: makros-db
-    plan: free
+    plan: starter
     databaseName: makros
