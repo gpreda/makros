@@ -439,11 +439,13 @@
         }
 
         function formatDateTitle(date) {
-            if (isToday(date)) return 'Today';
+            const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+            if (isToday(date)) return `Today (${dateStr})`;
 
             const yesterday = new Date();
             yesterday.setDate(yesterday.getDate() - 1);
-            if (getDateString(date) === getDateString(yesterday)) return 'Yesterday';
+            if (getDateString(date) === getDateString(yesterday)) return `Yesterday (${dateStr})`;
 
             const options = { weekday: 'short', month: 'short', day: 'numeric' };
             return date.toLocaleDateString('en-US', options);
