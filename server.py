@@ -329,6 +329,39 @@ async def delete_meal(meal_id: int):
     raise HTTPException(status_code=404, detail="Meal not found")
 
 
+@app.post("/api/meals/{meal_id}/copy")
+async def copy_meal(meal_id: int):
+    """Copy a meal to the current day."""
+    meal = get_storage().get_meal_with_items(meal_id)
+    if not meal:
+        raise HTTPException(status_code=404, detail="Meal not found")
+
+    # Prepare items and totals for logging
+    items = [{
+        'name': item['name'],
+        'amount': item['amount'],
+        'unit': item['unit'],
+        'calories': item['calories'],
+        'protein': item['protein'],
+        'carbs': item['carbs'],
+        'fat': item['fat'],
+        'fiber': item.get('fiber', 0),
+        'alcohol': item.get('alcohol', 0),
+    } for item in meal.get('items', [])]
+
+    totals = {
+        'calories': meal['total_calories'],
+        'protein': meal['total_protein'],
+        'carbs': meal['total_carbs'],
+        'fat': meal['total_fat'],
+        'fiber': meal.get('total_fiber', 0),
+        'alcohol': meal.get('total_alcohol', 0),
+    }
+
+    new_meal_id = get_storage().log_meal(meal['description'], items, totals)
+    return {"id": new_meal_id, "message": "Meal copied successfully"}
+
+
 @app.get("/api/daily")
 async def get_daily_totals(date: Optional[str] = None):
     """Get daily nutrition totals."""

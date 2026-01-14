@@ -234,7 +234,7 @@
             align-items: center;
             gap: 12px;
         }
-        .delete-btn {
+        .delete-btn, .copy-btn {
             background: transparent;
             color: #666;
             border: none;
@@ -248,6 +248,10 @@
         .delete-btn:hover {
             background: #ff4757;
             color: white;
+        }
+        .copy-btn:hover {
+            background: #4ecca3;
+            color: #1a1a2e;
         }
         .loading {
             text-align: center;
@@ -471,11 +475,15 @@
                     return;
                 }
 
+                const showCopyBtn = !isToday(currentDate);
                 list.innerHTML = data.meals.map(meal => {
                     const time = new Date(meal.logged_at).toLocaleTimeString('en-US', {
                         hour: 'numeric',
                         minute: '2-digit'
                     });
+                    const copyBtn = showCopyBtn
+                        ? `<button class="copy-btn" onclick="copyMeal(${meal.id})" title="Copy to today">&#x2398;</button>`
+                        : '';
                     return `
                         <div class="meal-item">
                             <div>
@@ -484,6 +492,7 @@
                             </div>
                             <div class="right">
                                 <div class="macros">${meal.total_calories} kcal</div>
+                                ${copyBtn}
                                 <button class="delete-btn" onclick="deleteMeal(${meal.id})" title="Delete meal">&times;</button>
                             </div>
                         </div>
@@ -680,6 +689,17 @@
                 loadData();
             } catch (e) {
                 alert('Failed to delete meal');
+            }
+        }
+
+        async function copyMeal(mealId) {
+            try {
+                const res = await fetch(`/api/meals/${mealId}/copy`, {method: 'POST'});
+                if (!res.ok) throw new Error('Failed to copy');
+                // Go to today and reload
+                goToToday();
+            } catch (e) {
+                alert('Failed to copy meal');
             }
         }
 
