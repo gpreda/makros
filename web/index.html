@@ -21,10 +21,31 @@
             max-width: 900px;
             margin: 0 auto;
         }
+        .header-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 30px;
+            gap: 20px;
+        }
         h1 {
             text-align: center;
-            margin-bottom: 30px;
             color: #4ecca3;
+            margin: 0;
+        }
+        .items-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .items-btn:hover {
+            background: #1a4a7a;
         }
         .card {
             background: #16213e;
@@ -256,7 +277,10 @@
 </head>
 <body>
     <div class="container">
-        <h1>Makros</h1>
+        <div class="header-row">
+            <h1>Makros</h1>
+            <a href="/items" class="items-btn">Items Database</a>
+        </div>
 
         <!-- Daily Summary with Navigation -->
         <div class="card">

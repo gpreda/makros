@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Makros - Items Database</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 30px;
+            gap: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #4ecca3;
+        }
+        .back-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .back-btn:hover {
+            background: #1a4a7a;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            margin-bottom: 15px;
+            color: #4ecca3;
+            font-size: 1.2em;
+        }
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .search-box input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #eee;
+            font-size: 16px;
+        }
+        .search-box input:focus {
+            outline: 2px solid #4ecca3;
+        }
+        .search-box button {
+            background: #4ecca3;
+            color: #1a1a2e;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .search-box button:hover {
+            background: #3db892;
+        }
+        .stats {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            color: #888;
+            font-size: 14px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 10px;
+            text-align: left;
+            border-bottom: 1px solid #0f3460;
+        }
+        th {
+            color: #4ecca3;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        tr:hover {
+            background: #0f3460;
+        }
+        .item-name {
+            font-weight: 600;
+        }
+        .item-desc {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+        .item-barcode {
+            font-size: 11px;
+            color: #666;
+            font-family: monospace;
+        }
+        .nutrition-cell {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .unit-badge {
+            background: #0f3460;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #4ecca3;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        .error {
+            background: #ff4757;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .pagination button {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .pagination button:hover:not(:disabled) {
+            background: #1a4a7a;
+        }
+        .pagination button:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
+        .pagination .page-info {
+            display: flex;
+            align-items: center;
+            color: #888;
+            font-size: 14px;
+        }
+        @media (max-width: 800px) {
+            th, td {
+                padding: 8px 6px;
+                font-size: 13px;
+            }
+            .nutrition-cell {
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-btn">&larr; Back</a>
+            <h1>Items Database</h1>
+            <div style="width: 80px;"></div>
+        </div>
+
+        <div class="card">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search items by name...">
+                <button onclick="searchItems()">Search</button>
+            </div>
+            <div class="stats" id="stats">
+                Loading...
+            </div>
+        </div>
+
+        <div class="card">
+            <div id="items-content">
+                <div class="loading">Loading items...</div>
+            </div>
+            <div class="pagination" id="pagination"></div>
+        </div>
+    </div>
+
+    <script>
+        const PAGE_SIZE = 50;
+        let currentOffset = 0;
+        let totalItems = 0;
+        let currentSearch = '';
+
+        async function loadItems(offset = 0, search = '') {
+            const content = document.getElementById('items-content');
+            content.innerHTML = '<div class="loading">Loading items...</div>';
+
+            try {
+                let url = `/api/items?limit=${PAGE_SIZE}&offset=${offset}`;
+                if (search) {
+                    url = `/api/items?limit=${PAGE_SIZE}&search=${encodeURIComponent(search)}`;
+                }
+
+                const res = await fetch(url);
+                const data = await res.json();
+
+                totalItems = data.total;
+                currentOffset = offset;
+                currentSearch = search;
+
+                updateStats(data.items.length, totalItems, search);
+
+                if (data.items.length === 0) {
+                    content.innerHTML = '<div class="empty">No items found</div>';
+                    updatePagination();
+                    return;
+                }
+
+                renderItems(data.items);
+                updatePagination();
+            } catch (e) {
+                content.innerHTML = '<div class="error">Failed to load items</div>';
+                console.error('Failed to load items:', e);
+            }
+        }
+
+        function updateStats(shown, total, search) {
+            const stats = document.getElementById('stats');
+            if (search) {
+                stats.textContent = `Found ${shown} items matching "${search}" (${total} total in database)`;
+            } else {
+                stats.textContent = `Showing ${currentOffset + 1}-${Math.min(currentOffset + shown, total)} of ${total} items`;
+            }
+        }
+
+        function renderItems(items) {
+            const content = document.getElementById('items-content');
+
+            const rows = items.map(item => `
+                <tr>
+                    <td>
+                        <div class="item-name">${escapeHtml(item.name)}</div>
+                        ${item.description ? `<div class="item-desc">${escapeHtml(item.description)}</div>` : ''}
+                        ${item.bar_code ? `<div class="item-barcode">${escapeHtml(item.bar_code)}</div>` : ''}
+                    </td>
+                    <td><span class="unit-badge">${item.default_unit || 'item'}</span></td>
+                    <td class="nutrition-cell">${item.calories || 0}</td>
+                    <td class="nutrition-cell">${(item.protein || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${(item.carbs || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${(item.fat || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${(item.fiber || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${(item.alcohol || 0).toFixed(1)}</td>
+                </tr>
+            `).join('');
+
+            content.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>Unit</th>
+                            <th>Kcal</th>
+                            <th>Protein</th>
+                            <th>Carbs</th>
+                            <th>Fat</th>
+                            <th>Fiber</th>
+                            <th>Alcohol</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        }
+
+        function updatePagination() {
+            const pagination = document.getElementById('pagination');
+
+            if (currentSearch || totalItems <= PAGE_SIZE) {
+                pagination.innerHTML = '';
+                return;
+            }
+
+            const totalPages = Math.ceil(totalItems / PAGE_SIZE);
+            const currentPage = Math.floor(currentOffset / PAGE_SIZE) + 1;
+
+            pagination.innerHTML = `
+                <button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>Previous</button>
+                <span class="page-info">Page ${currentPage} of ${totalPages}</span>
+                <button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next</button>
+            `;
+        }
+
+        function goToPage(page) {
+            const offset = (page - 1) * PAGE_SIZE;
+            loadItems(offset, currentSearch);
+        }
+
+        function searchItems() {
+            const search = document.getElementById('search-input').value.trim();
+            loadItems(0, search);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Handle Enter key in search
+        document.getElementById('search-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                searchItems();
+            }
+        });
+
+        // Initial load
+        loadItems();
+    </script>
+</body>
+</html>

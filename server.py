@@ -117,6 +117,15 @@ async def root():
     return {"message": "Makros API", "docs": "/docs"}
 
 
+@app.get("/items")
+async def items_page():
+    """Serve items page."""
+    items_path = WEB_DIR / "items.html"
+    if items_path.exists():
+        return FileResponse(items_path)
+    return {"message": "Items page not found"}
+
+
 # Meal analysis endpoints
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze_meal(request: AnalyzeRequest):

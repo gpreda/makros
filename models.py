@@ -42,12 +42,22 @@ class Item:
         description: Optional description
         unit_conversions: Dict mapping item-dependent units to grams
                          e.g., {'tbsp': 13.5, 'item': 50.0}
+        default_unit: The unit for nutritional info (e.g., 'item', 'g', 'serving')
+        calories/protein/carbs/fat/fiber/alcohol: Nutrition per default_unit
     """
     name: str
     id: Optional[int] = None
     bar_code: Optional[str] = None
     description: Optional[str] = None
     unit_conversions: dict[str, float] = field(default_factory=dict)
+    # Nutritional info per default_unit
+    default_unit: str = 'item'
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fat: Optional[float] = None
+    fiber: Optional[float] = None
+    alcohol: Optional[float] = None
 
     def convert_to_grams(self, amount: float, unit: str) -> Optional[float]:
         """Convert an amount in the given unit to grams.
@@ -93,6 +103,24 @@ class Item:
             'name': self.name,
             'description': self.description,
             'unit_conversions': self.unit_conversions,
+            'default_unit': self.default_unit,
+            'calories': self.calories,
+            'protein': self.protein,
+            'carbs': self.carbs,
+            'fat': self.fat,
+            'fiber': self.fiber,
+            'alcohol': self.alcohol,
+        }
+
+    def get_nutrition(self, amount: float) -> dict:
+        """Get scaled nutrition for given amount in default_unit."""
+        return {
+            'calories': int((self.calories or 0) * amount),
+            'protein': (self.protein or 0) * amount,
+            'carbs': (self.carbs or 0) * amount,
+            'fat': (self.fat or 0) * amount,
+            'fiber': (self.fiber or 0) * amount,
+            'alcohol': (self.alcohol or 0) * amount,
         }
 
     @classmethod
@@ -104,4 +132,11 @@ class Item:
             name=data['name'],
             description=data.get('description'),
             unit_conversions=data.get('unit_conversions', {}),
+            default_unit=data.get('default_unit', 'item'),
+            calories=data.get('calories'),
+            protein=data.get('protein'),
+            carbs=data.get('carbs'),
+            fat=data.get('fat'),
+            fiber=data.get('fiber'),
+            alcohol=data.get('alcohol'),
         )

@@ -49,9 +49,34 @@ class PostgresStorage:
                     name VARCHAR(255) NOT NULL UNIQUE,
                     description TEXT,
                     unit_conversions JSONB DEFAULT '{}',
+                    default_unit VARCHAR(20) DEFAULT 'item',
+                    calories REAL,
+                    protein REAL,
+                    carbs REAL,
+                    fat REAL,
+                    fiber REAL,
+                    alcohol REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            """)
+            # Migration: add nutrition columns if they don't exist
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'items' AND column_name = 'default_unit'
+                    ) THEN
+                        ALTER TABLE items ADD COLUMN default_unit VARCHAR(20) DEFAULT 'item';
+                        ALTER TABLE items ADD COLUMN calories REAL;
+                        ALTER TABLE items ADD COLUMN protein REAL;
+                        ALTER TABLE items ADD COLUMN carbs REAL;
+                        ALTER TABLE items ADD COLUMN fat REAL;
+                        ALTER TABLE items ADD COLUMN fiber REAL;
+                        ALTER TABLE items ADD COLUMN alcohol REAL;
+                    END IF;
+                END $$;
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_items_name
@@ -139,11 +164,14 @@ class PostgresStorage:
         """Add a new item. Returns item with assigned id."""
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO items (bar_code, name, description, unit_conversions)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO items (bar_code, name, description, unit_conversions,
+                                   default_unit, calories, protein, carbs, fat, fiber, alcohol)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (item.bar_code, item.name, item.description,
-                  json.dumps(item.unit_conversions)))
+                  json.dumps(item.unit_conversions), item.default_unit,
+                  item.calories, item.protein, item.carbs, item.fat,
+                  item.fiber, item.alcohol))
             item.id = cur.fetchone()[0]
         self.conn.commit()
         return item
@@ -186,10 +214,15 @@ class PostgresStorage:
             cur.execute("""
                 UPDATE items
                 SET bar_code = %s, name = %s, description = %s,
-                    unit_conversions = %s, updated_at = CURRENT_TIMESTAMP
+                    unit_conversions = %s, default_unit = %s,
+                    calories = %s, protein = %s, carbs = %s,
+                    fat = %s, fiber = %s, alcohol = %s,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (item.bar_code, item.name, item.description,
-                  json.dumps(item.unit_conversions), item.id))
+                  json.dumps(item.unit_conversions), item.default_unit,
+                  item.calories, item.protein, item.carbs, item.fat,
+                  item.fiber, item.alcohol, item.id))
             updated = cur.rowcount > 0
         self.conn.commit()
         return updated
@@ -235,6 +268,13 @@ class PostgresStorage:
             name=row['name'],
             description=row['description'],
             unit_conversions=row['unit_conversions'] or {},
+            default_unit=row.get('default_unit', 'item'),
+            calories=row.get('calories'),
+            protein=row.get('protein'),
+            carbs=row.get('carbs'),
+            fat=row.get('fat'),
+            fiber=row.get('fiber'),
+            alcohol=row.get('alcohol'),
         )
 
     # Meal operations
