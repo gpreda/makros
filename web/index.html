@@ -818,6 +818,13 @@
             }
         });
 
+        document.getElementById('weight-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveWeight();
+            }
+        });
+
         // Initial load
         updateDayNav();
         loadData();
