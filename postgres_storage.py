@@ -177,19 +177,23 @@ class PostgresStorage:
     # Item CRUD operations
     def add_item(self, item: Item) -> Item:
         """Add a new item. Returns item with assigned id."""
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO items (bar_code, name, description, unit_conversions,
-                                   default_unit, calories, protein, carbs, fat, fiber, alcohol)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (item.bar_code, item.name, item.description,
-                  json.dumps(item.unit_conversions), item.default_unit,
-                  item.calories, item.protein, item.carbs, item.fat,
-                  item.fiber, item.alcohol))
-            item.id = cur.fetchone()[0]
-        self.conn.commit()
-        return item
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO items (bar_code, name, description, unit_conversions,
+                                       default_unit, calories, protein, carbs, fat, fiber, alcohol)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (item.bar_code, item.name, item.description,
+                      json.dumps(item.unit_conversions), item.default_unit,
+                      item.calories, item.protein, item.carbs, item.fat,
+                      item.fiber, item.alcohol))
+                item.id = cur.fetchone()[0]
+            self.conn.commit()
+            return item
+        except Exception as e:
+            self.conn.rollback()
+            raise
 
     def get_item_by_id(self, item_id: int) -> Optional[Item]:
         """Get item by id."""
@@ -295,31 +299,35 @@ class PostgresStorage:
     # Meal operations
     def log_meal(self, description: str, items: list[dict], totals: dict) -> int:
         """Log a meal with its items. Returns meal id."""
-        with self.conn.cursor() as cur:
-            # Insert meal
-            cur.execute("""
-                INSERT INTO meals (description, total_calories, total_protein,
-                                   total_carbs, total_fat, total_fiber, total_alcohol)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (description, totals.get('calories'), totals.get('protein'),
-                  totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                  totals.get('alcohol', 0)))
-            meal_id = cur.fetchone()[0]
-
-            # Insert meal items
-            for item in items:
+        try:
+            with self.conn.cursor() as cur:
+                # Insert meal
                 cur.execute("""
-                    INSERT INTO meal_items (meal_id, name, amount, unit,
-                                           calories, protein, carbs, fat, fiber, alcohol)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (meal_id, item.get('name'), item.get('amount'),
-                      item.get('unit'), item.get('calories'),
-                      item.get('protein'), item.get('carbs'),
-                      item.get('fat'), item.get('fiber'), item.get('alcohol', 0)))
+                    INSERT INTO meals (description, total_calories, total_protein,
+                                       total_carbs, total_fat, total_fiber, total_alcohol)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (description, totals.get('calories'), totals.get('protein'),
+                      totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
+                      totals.get('alcohol', 0)))
+                meal_id = cur.fetchone()[0]
 
-        self.conn.commit()
-        return meal_id
+                # Insert meal items
+                for item in items:
+                    cur.execute("""
+                        INSERT INTO meal_items (meal_id, name, amount, unit,
+                                               calories, protein, carbs, fat, fiber, alcohol)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (meal_id, item.get('name'), item.get('amount'),
+                          item.get('unit'), item.get('calories'),
+                          item.get('protein'), item.get('carbs'),
+                          item.get('fat'), item.get('fiber'), item.get('alcohol', 0)))
+
+            self.conn.commit()
+            return meal_id
+        except Exception as e:
+            self.conn.rollback()
+            raise
 
     def get_meals(self, limit: int = 50, offset: int = 0,
                   date: Optional[datetime] = None) -> list[dict]:
