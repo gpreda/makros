@@ -455,3 +455,19 @@ class PostgresStorage:
                     ORDER BY date ASC
                 """)
             return [{'date': str(row['date']), 'weight_lbs': row['weight_lbs']} for row in cur.fetchall()]
+
+    # Event logging (shared with tongue app)
+    def log_event(self, event: str, user_id: str, session_id: str = None,
+                  app_name: str = "makros", **data) -> None:
+        """Log an event to the shared events table."""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO events (app_name, event, user_id, session_id, data)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (app_name, event, user_id, session_id,
+                      json.dumps(data) if data else None))
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error logging event: {e}")
+            self.conn.rollback()

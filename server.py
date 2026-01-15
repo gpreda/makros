@@ -3,6 +3,7 @@
 import ast
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -101,6 +102,26 @@ def get_genai_client() -> genai.Client:
 
     _genai_client = genai.Client(api_key=api_key)
     return _genai_client
+
+
+# Session management for logging
+_user_sessions: dict[str, str] = {}
+DEFAULT_USER = "default"
+
+
+def get_session_id(user_id: str = DEFAULT_USER) -> str:
+    """Get or create a session ID for a user."""
+    if user_id not in _user_sessions:
+        _user_sessions[user_id] = str(uuid.uuid4())[:8]
+    return _user_sessions[user_id]
+
+
+def log_event(event: str, user_id: str = DEFAULT_USER, **data) -> None:
+    """Log an event to the database."""
+    storage = get_storage()
+    if storage:
+        session_id = get_session_id(user_id)
+        storage.log_event(event, user_id, session_id, **data)
 
 
 @app.on_event("startup")
@@ -313,21 +334,40 @@ Return ONLY the dictionary, no other text or markdown.
     try:
         result = ast.literal_eval(text)
         items = result.get('items', [])
+        totals = result.get('totals', {})
         # Process items: check DB, save new items, handle name conflicts
         processed_items = process_analyzed_items(items)
+
+        # Log the analysis event
+        log_event('meal.analyze',
+                  description=request.description,
+                  item_count=len(processed_items),
+                  calories=totals.get('calories', 0))
+
         return AnalyzeResponse(
             items=processed_items,
-            totals=result.get('totals', {})
+            totals=totals
         )
     except (SyntaxError, ValueError) as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
 
 
 @app.post("/api/meals")
-async def log_meal(request: LogMealRequest):
+async def log_meal_endpoint(request: LogMealRequest):
     """Log a meal to the database."""
     try:
         meal_id = get_storage().log_meal(request.description, request.items, request.totals)
+
+        # Log the meal logging event
+        log_event('meal.log',
+                  meal_id=meal_id,
+                  description=request.description,
+                  item_count=len(request.items),
+                  calories=request.totals.get('calories', 0),
+                  protein=request.totals.get('protein', 0),
+                  carbs=request.totals.get('carbs', 0),
+                  fat=request.totals.get('fat', 0))
+
         return {"id": meal_id, "message": "Meal logged successfully"}
     except Exception as e:
         print(f"Error logging meal: {e}")
@@ -360,6 +400,7 @@ async def get_meal(meal_id: int):
 async def delete_meal(meal_id: int):
     """Delete a meal."""
     if get_storage().delete_meal(meal_id):
+        log_event('meal.delete', meal_id=meal_id)
         return {"message": "Meal deleted"}
     raise HTTPException(status_code=404, detail="Meal not found")
 
@@ -394,6 +435,14 @@ async def copy_meal(meal_id: int):
     }
 
     new_meal_id = get_storage().log_meal(meal['description'], items, totals)
+
+    # Log the copy event
+    log_event('meal.copy',
+              original_meal_id=meal_id,
+              new_meal_id=new_meal_id,
+              description=meal['description'],
+              calories=totals.get('calories', 0))
+
     return {"id": new_meal_id, "message": "Meal copied successfully"}
 
 
@@ -450,6 +499,11 @@ async def set_weight(request: WeightRequest, date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
     get_storage().set_weight(request.weight_lbs, dt)
+
+    log_event('weight.set',
+              weight_lbs=request.weight_lbs,
+              date=date or datetime.now().strftime('%Y-%m-%d'))
+
     return {"message": "Weight saved", "weight_lbs": request.weight_lbs}
 
 
@@ -463,6 +517,8 @@ async def delete_weight(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
     if get_storage().delete_weight(dt):
+        log_event('weight.delete',
+                  date=date or datetime.now().strftime('%Y-%m-%d'))
         return {"message": "Weight deleted"}
     raise HTTPException(status_code=404, detail="No weight found for this date")
 
@@ -556,9 +612,16 @@ Return ONLY the dictionary, no other text.
 
         per_100g = result.get('per_100g', {})
         per_item = result.get('per_item')
+        confidence = result.get('confidence', 0)
+
+        # Log the suggestion event
+        log_event('item.suggest',
+                  name=request.name,
+                  confidence=confidence,
+                  recognized=result.get('recognized', False))
 
         return {
-            'confidence': result.get('confidence', 0),
+            'confidence': confidence,
             'recognized': result.get('recognized', False),
             'recommended_unit': result.get('recommended_unit', 'g'),
             'per_100g': {
@@ -615,6 +678,14 @@ async def create_item(request: ItemCreate):
     )
     try:
         item = get_storage().add_item(item)
+
+        # Log the item creation event
+        log_event('item.create',
+                  item_id=item.id,
+                  name=item.name,
+                  default_unit=item.default_unit,
+                  calories=item.calories)
+
         return item.to_dict()
     except Exception as e:
         if "unique" in str(e).lower():
@@ -669,6 +740,7 @@ async def update_item(item_id: int, request: ItemUpdate):
 async def delete_item(item_id: int):
     """Delete an item."""
     if get_storage().delete_item(item_id):
+        log_event('item.delete', item_id=item_id)
         return {"message": "Item deleted"}
     raise HTTPException(status_code=404, detail="Item not found")
 
