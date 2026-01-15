@@ -567,8 +567,10 @@
             const list = document.getElementById('meal-list');
             try {
                 const dateStr = getDateString(currentDate);
+                console.log(`[DEBUG] loadMeals: requesting date=${dateStr}, currentDate=${currentDate}`);
                 const res = await fetch(`/api/meals?limit=50&date=${dateStr}`);
                 const data = await res.json();
+                console.log(`[DEBUG] loadMeals: received ${data.meals.length} meals`, data.meals);
 
                 if (data.meals.length === 0) {
                     list.innerHTML = '<div class="loading">No meals logged</div>';

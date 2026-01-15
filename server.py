@@ -382,11 +382,14 @@ async def log_meal_endpoint(request: LogMealRequest):
     try:
         storage = get_storage()
         today = datetime.now()
+        today_str = today.strftime('%Y-%m-%d')
+
+        print(f"[DEBUG] Server datetime.now() = {today}, date string = {today_str}")
 
         # Count meals before insert
         meals_before = storage.get_meals(limit=1000, date=today)
         count_before = len(meals_before)
-        print(f"[DEBUG] Meals for today BEFORE insert: {count_before}")
+        print(f"[DEBUG] Meals for today ({today_str}) BEFORE insert: {count_before}")
 
         meal_id = storage.log_meal(request.description, request.items, request.totals)
         print(f"[DEBUG] Meal logged successfully with id={meal_id}")
@@ -439,7 +442,12 @@ async def get_meals(limit: int = 50, offset: int = 0, date: Optional[str] = None
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
+
+    print(f"[DEBUG] GET /api/meals called: date param={date}, parsed dt={dt}, server now={datetime.now()}")
     meals = get_storage().get_meals(limit, offset, dt)
+    print(f"[DEBUG] GET /api/meals returning {len(meals)} meals")
+    if meals:
+        print(f"[DEBUG] First meal: id={meals[0].get('id')}, logged_at={meals[0].get('logged_at')}")
     return {"meals": meals}
 
 
