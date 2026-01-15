@@ -380,13 +380,35 @@ async def log_meal_endpoint(request: LogMealRequest):
     """Log a meal to the database."""
     print(f"[DEBUG] log_meal_endpoint called: description={request.description}, items={len(request.items)}, totals={request.totals}")
     try:
-        meal_id = get_storage().log_meal(request.description, request.items, request.totals)
+        storage = get_storage()
+        today = datetime.now()
+
+        # Count meals before insert
+        meals_before = storage.get_meals(limit=1000, date=today)
+        count_before = len(meals_before)
+        print(f"[DEBUG] Meals for today BEFORE insert: {count_before}")
+
+        meal_id = storage.log_meal(request.description, request.items, request.totals)
         print(f"[DEBUG] Meal logged successfully with id={meal_id}")
 
+        # Count meals after insert
+        meals_after = storage.get_meals(limit=1000, date=today)
+        count_after = len(meals_after)
+        print(f"[DEBUG] Meals for today AFTER insert: {count_after}")
+
+        if count_after == count_before + 1:
+            print(f"[DEBUG] COUNT VERIFIED: Meal count increased by 1")
+        else:
+            print(f"[ERROR] COUNT MISMATCH: Expected {count_before + 1}, got {count_after}")
+            # Check what date the meal was logged with
+            verification = storage.get_meal_with_items(meal_id)
+            if verification:
+                print(f"[DEBUG] Meal {meal_id} logged_at: {verification.get('logged_at')}")
+
         # Verify the meal was actually added to the database
-        verification = get_storage().get_meal_with_items(meal_id)
+        verification = storage.get_meal_with_items(meal_id)
         if verification:
-            print(f"[DEBUG] VERIFIED: Meal {meal_id} exists in DB with {len(verification.get('items', []))} items")
+            print(f"[DEBUG] VERIFIED: Meal {meal_id} exists in DB with {len(verification.get('items', []))} items, logged_at={verification.get('logged_at')}")
         else:
             print(f"[ERROR] VERIFICATION FAILED: Meal {meal_id} NOT FOUND in DB after insert!")
 
@@ -400,7 +422,7 @@ async def log_meal_endpoint(request: LogMealRequest):
                   carbs=request.totals.get('carbs', 0),
                   fat=request.totals.get('fat', 0))
 
-        return {"id": meal_id, "message": "Meal logged successfully", "verified": verification is not None}
+        return {"id": meal_id, "message": "Meal logged successfully", "verified": verification is not None, "count_before": count_before, "count_after": count_after}
     except Exception as e:
         print(f"[ERROR] Error logging meal: {e}")
         import traceback
