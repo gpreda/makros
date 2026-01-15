@@ -350,12 +350,9 @@ Return ONLY the dictionary, no other text or markdown.
         result = ast.literal_eval(text)
         items = result.get('items', [])
         totals = result.get('totals', {})
-        print(f"[DEBUG] Analyzed items: {items}")
-        print(f"[DEBUG] Analyzed totals: {totals}")
 
         # Process items: check DB, save new items, handle name conflicts
         processed_items = process_analyzed_items(items)
-        print(f"[DEBUG] Processed items: {processed_items}")
 
         # Log the analysis event with AI tracking
         log_event('meal.analyze',
@@ -372,58 +369,23 @@ Return ONLY the dictionary, no other text or markdown.
             totals=totals
         )
     except (SyntaxError, ValueError) as e:
-        print(f"[ERROR] Failed to parse AI response: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
 
 
 @app.post("/api/meals")
 async def log_meal_endpoint(request: LogMealRequest):
     """Log a meal to the database."""
-    print(f"[DEBUG] log_meal_endpoint called: description={request.description}, items={len(request.items)}, totals={request.totals}, date={request.date}")
     try:
         storage = get_storage()
 
         # Use browser's date if provided, otherwise fall back to server time
+        meal_datetime = None
         if request.date:
-            # Parse the date and set time to current time of day
             meal_date = datetime.fromisoformat(request.date)
-            # Add current time so meals are ordered correctly within a day
             now = datetime.now()
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
-            print(f"[DEBUG] Using browser date: {request.date} -> {meal_datetime}")
-        else:
-            meal_datetime = None
-            print(f"[DEBUG] No browser date provided, using server default")
-
-        # Count meals before insert (using the target date)
-        target_date = meal_datetime if meal_datetime else datetime.now()
-        meals_before = storage.get_meals(limit=1000, date=target_date)
-        count_before = len(meals_before)
-        print(f"[DEBUG] Meals for {target_date.strftime('%Y-%m-%d')} BEFORE insert: {count_before}")
 
         meal_id = storage.log_meal(request.description, request.items, request.totals, logged_at=meal_datetime)
-        print(f"[DEBUG] Meal logged successfully with id={meal_id}")
-
-        # Count meals after insert
-        meals_after = storage.get_meals(limit=1000, date=target_date)
-        count_after = len(meals_after)
-        print(f"[DEBUG] Meals for today AFTER insert: {count_after}")
-
-        if count_after == count_before + 1:
-            print(f"[DEBUG] COUNT VERIFIED: Meal count increased by 1")
-        else:
-            print(f"[ERROR] COUNT MISMATCH: Expected {count_before + 1}, got {count_after}")
-            # Check what date the meal was logged with
-            verification = storage.get_meal_with_items(meal_id)
-            if verification:
-                print(f"[DEBUG] Meal {meal_id} logged_at: {verification.get('logged_at')}")
-
-        # Verify the meal was actually added to the database
-        verification = storage.get_meal_with_items(meal_id)
-        if verification:
-            print(f"[DEBUG] VERIFIED: Meal {meal_id} exists in DB with {len(verification.get('items', []))} items, logged_at={verification.get('logged_at')}")
-        else:
-            print(f"[ERROR] VERIFICATION FAILED: Meal {meal_id} NOT FOUND in DB after insert!")
 
         # Log the meal logging event
         log_event('meal.log',
@@ -435,11 +397,9 @@ async def log_meal_endpoint(request: LogMealRequest):
                   carbs=request.totals.get('carbs', 0),
                   fat=request.totals.get('fat', 0))
 
-        return {"id": meal_id, "message": "Meal logged successfully", "verified": verification is not None, "count_before": count_before, "count_after": count_after}
+        return {"id": meal_id, "message": "Meal logged successfully"}
     except Exception as e:
-        print(f"[ERROR] Error logging meal: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error logging meal: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to log meal: {str(e)}")
 
 
@@ -452,18 +412,7 @@ async def get_meals(limit: int = 50, offset: int = 0, date: Optional[str] = None
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-
-    print(f"[DEBUG] GET /api/meals called: date param={date}, parsed dt={dt}, server now={datetime.now()}")
-
-    # Also check what meals exist without date filter for debugging
-    all_meals = get_storage().get_meals(limit, offset, None)
-    print(f"[DEBUG] Total meals (no date filter): {len(all_meals)}")
-    if all_meals:
-        for m in all_meals[:5]:
-            print(f"[DEBUG]   meal id={m.get('id')}, logged_at={m.get('logged_at')}, desc={m.get('description', '')[:30]}")
-
     meals = get_storage().get_meals(limit, offset, dt)
-    print(f"[DEBUG] GET /api/meals returning {len(meals)} meals for date={date}")
     return {"meals": meals}
 
 
