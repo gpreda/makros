@@ -476,9 +476,9 @@
                 todayBtn.classList.remove('hidden');
             }
 
-            // Disable next button if on today
+            // Next button always enabled now (for timezone issues)
             const nextBtn = document.getElementById('next-btn');
-            nextBtn.disabled = isToday(currentDate);
+            nextBtn.disabled = false;
 
             // Show/hide analyze card (only show for today)
             const analyzeCard = document.getElementById('analyze-card');
@@ -496,11 +496,9 @@
         }
 
         function nextDay() {
-            if (!isToday(currentDate)) {
-                currentDate.setDate(currentDate.getDate() + 1);
-                updateDayNav();
-                loadData();
-            }
+            currentDate.setDate(currentDate.getDate() + 1);
+            updateDayNav();
+            loadData();
         }
 
         function goToToday() {
