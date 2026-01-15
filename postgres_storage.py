@@ -250,18 +250,6 @@ class PostgresStorage:
         self.conn.commit()
         return deleted
 
-    def get_item_by_name(self, name: str) -> Optional[Item]:
-        """Get item by exact name (case-insensitive)."""
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM items WHERE LOWER(name) = LOWER(%s)",
-                (name,)
-            )
-            row = cur.fetchone()
-            if row:
-                return self._row_to_item(row)
-        return None
-
     def search_items(self, query: str, limit: int = 20) -> list[Item]:
         """Search items by name (partial match)."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:

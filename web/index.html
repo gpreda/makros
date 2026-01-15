@@ -705,7 +705,10 @@
                     body: JSON.stringify({description})
                 });
 
-                if (!res.ok) throw new Error('Analysis failed');
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || 'Analysis failed');
+                }
 
                 const data = await res.json();
                 currentAnalysis = data;
@@ -713,7 +716,8 @@
                 renderAnalysis(data);
                 result.classList.remove('hidden');
             } catch (e) {
-                error.textContent = 'Failed to analyze meal. Please try again.';
+                console.error('Analyze error:', e);
+                error.textContent = 'Failed to analyze meal: ' + e.message;
                 error.classList.remove('hidden');
             } finally {
                 btn.disabled = false;
@@ -751,7 +755,10 @@
         }
 
         async function logMeal() {
-            if (!currentAnalysis) return;
+            if (!currentAnalysis) {
+                alert('No meal to log. Please analyze a meal first.');
+                return;
+            }
 
             try {
                 const res = await fetch('/api/meals', {
@@ -764,12 +771,16 @@
                     })
                 });
 
-                if (!res.ok) throw new Error('Failed to log meal');
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || 'Failed to log meal');
+                }
 
                 clearAnalysis();
                 loadData();
             } catch (e) {
-                alert('Failed to log meal');
+                console.error('Log meal error:', e);
+                alert('Failed to log meal: ' + e.message);
             }
         }
 

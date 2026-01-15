@@ -228,9 +228,13 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
                     fiber=new_macros['fiber'],
                     alcohol=new_macros['alcohol'],
                 )
-                storage.add_item(new_item)
-                # Update the item data with new name
-                item_data['name'] = unique_name
+                try:
+                    storage.add_item(new_item)
+                    # Update the item data with new name
+                    item_data['name'] = unique_name
+                except Exception as e:
+                    # If add fails (e.g., race condition), just use original name
+                    print(f"Warning: Failed to add item '{unique_name}': {e}")
                 processed_items.append(item_data)
         else:
             # New item, add to DB
@@ -244,7 +248,11 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
                 fiber=new_macros['fiber'],
                 alcohol=new_macros['alcohol'],
             )
-            storage.add_item(new_item)
+            try:
+                storage.add_item(new_item)
+            except Exception as e:
+                # If add fails (e.g., item was just added), continue anyway
+                print(f"Warning: Failed to add item '{name}': {e}")
             processed_items.append(item_data)
 
     return processed_items
@@ -318,8 +326,12 @@ Return ONLY the dictionary, no other text or markdown.
 @app.post("/api/meals")
 async def log_meal(request: LogMealRequest):
     """Log a meal to the database."""
-    meal_id = get_storage().log_meal(request.description, request.items, request.totals)
-    return {"id": meal_id, "message": "Meal logged successfully"}
+    try:
+        meal_id = get_storage().log_meal(request.description, request.items, request.totals)
+        return {"id": meal_id, "message": "Meal logged successfully"}
+    except Exception as e:
+        print(f"Error logging meal: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to log meal: {str(e)}")
 
 
 @app.get("/api/meals")
