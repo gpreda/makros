@@ -381,7 +381,7 @@ Return ONLY the dictionary, no other text or markdown.
 
 
 @app.post("/api/analyze/image", response_model=AnalyzeResponse)
-async def analyze_image(file: UploadFile = File(...)):
+async def analyze_image(file: UploadFile = File(...), hint: Optional[str] = Form(None)):
     """Analyze a meal image and return nutritional breakdown."""
     client = get_genai_client()
 
@@ -394,10 +394,20 @@ async def analyze_image(file: UploadFile = File(...)):
     if content_type not in ['image/jpeg', 'image/png', 'image/webp', 'image/gif']:
         content_type = 'image/jpeg'
 
+    # Build hint section if provided
+    hint_section = ""
+    if hint and hint.strip():
+        hint_section = f"""
+USER HINT: The user provided this description to help identify the food:
+"{hint.strip()}"
+Use this hint to better identify items, quantities, or specific products in the image.
+
+"""
+
     units_list = ', '.join(VALID_UNITS)
     prompt = f"""
 Analyze this food image and provide a nutritional breakdown.
-
+{hint_section}
 IMPORTANT: First determine if this image contains food.
 - If NO food is visible, respond with: {{'no_food': true, 'message': 'No food detected in image'}}
 - If food IS visible, provide the full nutritional analysis below.

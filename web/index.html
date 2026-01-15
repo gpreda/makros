@@ -518,7 +518,7 @@
         <div class="card" id="analyze-card">
             <h2>Log Meal</h2>
             <div class="input-row">
-                <textarea id="meal-input" placeholder="Describe your meal, e.g.: 4 eggs, 50g cheese, 2 slices of bread with butter"></textarea>
+                <textarea id="meal-input" placeholder="Describe your meal or add hints for photo, e.g.: 3 eggs, butter beans, one can of sardines"></textarea>
                 <label class="upload-btn" title="Upload photo">
                     <input type="file" id="image-input" accept="image/*" onchange="handleImageSelect(event)">
                     &#x1F4F7;
@@ -854,9 +854,12 @@
             try {
                 let res;
                 if (currentImageFile) {
-                    // Use image analysis endpoint
+                    // Use image analysis endpoint with optional text hint
                     const formData = new FormData();
                     formData.append('file', currentImageFile);
+                    if (description) {
+                        formData.append('hint', description);
+                    }
                     res = await fetch('/api/analyze/image', {
                         method: 'POST',
                         body: formData
