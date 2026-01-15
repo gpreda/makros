@@ -778,9 +778,15 @@
                 console.log('[DEBUG] Response status:', res.status);
                 const responseData = await res.json();
                 console.log('[DEBUG] Response data:', responseData);
+                console.log('[DEBUG] Meal verified in DB:', responseData.verified);
 
                 if (!res.ok) {
                     throw new Error(responseData.detail || 'Failed to log meal');
+                }
+
+                if (!responseData.verified) {
+                    console.error('[ERROR] Meal was not verified in database!');
+                    alert('Warning: Meal may not have been saved properly');
                 }
 
                 clearAnalysis();

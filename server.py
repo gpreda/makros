@@ -383,6 +383,13 @@ async def log_meal_endpoint(request: LogMealRequest):
         meal_id = get_storage().log_meal(request.description, request.items, request.totals)
         print(f"[DEBUG] Meal logged successfully with id={meal_id}")
 
+        # Verify the meal was actually added to the database
+        verification = get_storage().get_meal_with_items(meal_id)
+        if verification:
+            print(f"[DEBUG] VERIFIED: Meal {meal_id} exists in DB with {len(verification.get('items', []))} items")
+        else:
+            print(f"[ERROR] VERIFICATION FAILED: Meal {meal_id} NOT FOUND in DB after insert!")
+
         # Log the meal logging event
         log_event('meal.log',
                   meal_id=meal_id,
@@ -393,7 +400,7 @@ async def log_meal_endpoint(request: LogMealRequest):
                   carbs=request.totals.get('carbs', 0),
                   fat=request.totals.get('fat', 0))
 
-        return {"id": meal_id, "message": "Meal logged successfully"}
+        return {"id": meal_id, "message": "Meal logged successfully", "verified": verification is not None}
     except Exception as e:
         print(f"[ERROR] Error logging meal: {e}")
         import traceback
