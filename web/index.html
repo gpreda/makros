@@ -755,25 +755,32 @@
         }
 
         async function logMeal() {
+            console.log('[DEBUG] logMeal called, currentAnalysis:', currentAnalysis);
             if (!currentAnalysis) {
                 alert('No meal to log. Please analyze a meal first.');
                 return;
             }
 
+            const payload = {
+                description: currentDescription,
+                items: currentAnalysis.items,
+                totals: currentAnalysis.totals
+            };
+            console.log('[DEBUG] Sending meal payload:', payload);
+
             try {
                 const res = await fetch('/api/meals', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        description: currentDescription,
-                        items: currentAnalysis.items,
-                        totals: currentAnalysis.totals
-                    })
+                    body: JSON.stringify(payload)
                 });
 
+                console.log('[DEBUG] Response status:', res.status);
+                const responseData = await res.json();
+                console.log('[DEBUG] Response data:', responseData);
+
                 if (!res.ok) {
-                    const errData = await res.json().catch(() => ({}));
-                    throw new Error(errData.detail || 'Failed to log meal');
+                    throw new Error(responseData.detail || 'Failed to log meal');
                 }
 
                 clearAnalysis();

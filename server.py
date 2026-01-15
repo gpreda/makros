@@ -335,8 +335,12 @@ Return ONLY the dictionary, no other text or markdown.
         result = ast.literal_eval(text)
         items = result.get('items', [])
         totals = result.get('totals', {})
+        print(f"[DEBUG] Analyzed items: {items}")
+        print(f"[DEBUG] Analyzed totals: {totals}")
+
         # Process items: check DB, save new items, handle name conflicts
         processed_items = process_analyzed_items(items)
+        print(f"[DEBUG] Processed items: {processed_items}")
 
         # Log the analysis event
         log_event('meal.analyze',
@@ -349,14 +353,17 @@ Return ONLY the dictionary, no other text or markdown.
             totals=totals
         )
     except (SyntaxError, ValueError) as e:
+        print(f"[ERROR] Failed to parse AI response: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
 
 
 @app.post("/api/meals")
 async def log_meal_endpoint(request: LogMealRequest):
     """Log a meal to the database."""
+    print(f"[DEBUG] log_meal_endpoint called: description={request.description}, items={len(request.items)}, totals={request.totals}")
     try:
         meal_id = get_storage().log_meal(request.description, request.items, request.totals)
+        print(f"[DEBUG] Meal logged successfully with id={meal_id}")
 
         # Log the meal logging event
         log_event('meal.log',
@@ -370,7 +377,9 @@ async def log_meal_endpoint(request: LogMealRequest):
 
         return {"id": meal_id, "message": "Meal logged successfully"}
     except Exception as e:
-        print(f"Error logging meal: {e}")
+        print(f"[ERROR] Error logging meal: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to log meal: {str(e)}")
 
 
