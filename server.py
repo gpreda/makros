@@ -444,10 +444,16 @@ async def get_meals(limit: int = 50, offset: int = 0, date: Optional[str] = None
             raise HTTPException(status_code=400, detail="Invalid date format")
 
     print(f"[DEBUG] GET /api/meals called: date param={date}, parsed dt={dt}, server now={datetime.now()}")
+
+    # Also check what meals exist without date filter for debugging
+    all_meals = get_storage().get_meals(limit, offset, None)
+    print(f"[DEBUG] Total meals (no date filter): {len(all_meals)}")
+    if all_meals:
+        for m in all_meals[:5]:
+            print(f"[DEBUG]   meal id={m.get('id')}, logged_at={m.get('logged_at')}, desc={m.get('description', '')[:30]}")
+
     meals = get_storage().get_meals(limit, offset, dt)
-    print(f"[DEBUG] GET /api/meals returning {len(meals)} meals")
-    if meals:
-        print(f"[DEBUG] First meal: id={meals[0].get('id')}, logged_at={meals[0].get('logged_at')}")
+    print(f"[DEBUG] GET /api/meals returning {len(meals)} meals for date={date}")
     return {"meals": meals}
 
 
