@@ -113,6 +113,30 @@ class PostgresStorage:
                     END IF;
                 END $$;
             """)
+            # Add name column for short meal names (migration)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'meals' AND column_name = 'name'
+                    ) THEN
+                        ALTER TABLE meals ADD COLUMN name VARCHAR(100);
+                    END IF;
+                END $$;
+            """)
+            # Add image column for meal photos (migration)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'meals' AND column_name = 'image_data'
+                    ) THEN
+                        ALTER TABLE meals ADD COLUMN image_data BYTEA;
+                    END IF;
+                END $$;
+            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_meals_logged_at
                 ON meals(logged_at)
@@ -298,29 +322,31 @@ class PostgresStorage:
 
     # Meal operations
     def log_meal(self, description: str, items: list[dict], totals: dict,
-                 logged_at: Optional[datetime] = None) -> int:
+                 logged_at: Optional[datetime] = None, name: Optional[str] = None,
+                 image_data: Optional[bytes] = None) -> int:
         """Log a meal with its items. Returns meal id."""
         try:
             with self.conn.cursor() as cur:
                 # Insert meal with explicit timestamp if provided
                 if logged_at:
                     cur.execute("""
-                        INSERT INTO meals (description, total_calories, total_protein,
-                                           total_carbs, total_fat, total_fiber, total_alcohol, logged_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO meals (name, description, total_calories, total_protein,
+                                           total_carbs, total_fat, total_fiber, total_alcohol,
+                                           logged_at, image_data)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
-                    """, (description, totals.get('calories'), totals.get('protein'),
+                    """, (name, description, totals.get('calories'), totals.get('protein'),
                           totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                          totals.get('alcohol', 0), logged_at))
+                          totals.get('alcohol', 0), logged_at, image_data))
                 else:
                     cur.execute("""
-                        INSERT INTO meals (description, total_calories, total_protein,
-                                           total_carbs, total_fat, total_fiber, total_alcohol)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO meals (name, description, total_calories, total_protein,
+                                           total_carbs, total_fat, total_fiber, total_alcohol, image_data)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
-                    """, (description, totals.get('calories'), totals.get('protein'),
+                    """, (name, description, totals.get('calories'), totals.get('protein'),
                           totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                          totals.get('alcohol', 0)))
+                          totals.get('alcohol', 0), image_data))
                 meal_id = cur.fetchone()[0]
 
                 # Insert meal items
@@ -346,18 +372,33 @@ class PostgresStorage:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             if date:
                 cur.execute("""
-                    SELECT * FROM meals
+                    SELECT id, name, description, logged_at, total_calories, total_protein,
+                           total_carbs, total_fat, total_fiber, total_alcohol,
+                           (image_data IS NOT NULL) as has_image
+                    FROM meals
                     WHERE DATE(logged_at) = DATE(%s)
                     ORDER BY logged_at DESC
                     LIMIT %s OFFSET %s
                 """, (date, limit, offset))
             else:
                 cur.execute("""
-                    SELECT * FROM meals
+                    SELECT id, name, description, logged_at, total_calories, total_protein,
+                           total_carbs, total_fat, total_fiber, total_alcohol,
+                           (image_data IS NOT NULL) as has_image
+                    FROM meals
                     ORDER BY logged_at DESC
                     LIMIT %s OFFSET %s
                 """, (limit, offset))
             return [dict(row) for row in cur.fetchall()]
+
+    def get_meal_image(self, meal_id: int) -> Optional[bytes]:
+        """Get image data for a meal."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT image_data FROM meals WHERE id = %s", (meal_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return bytes(row[0])
+        return None
 
     def get_meal_with_items(self, meal_id: int) -> Optional[dict]:
         """Get a meal with all its items."""

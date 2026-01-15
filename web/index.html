@@ -321,6 +321,105 @@
         .hidden {
             display: none;
         }
+        .input-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+        .input-row textarea {
+            flex: 1;
+        }
+        .upload-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 12px 16px;
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 80px;
+            cursor: pointer;
+        }
+        .upload-btn:hover {
+            background: #1a4a7a;
+        }
+        .upload-btn input {
+            display: none;
+        }
+        .image-preview {
+            margin-top: 10px;
+            position: relative;
+            display: inline-block;
+        }
+        .image-preview img {
+            max-width: 200px;
+            max-height: 150px;
+            border-radius: 8px;
+            border: 2px solid #4ecca3;
+        }
+        .image-preview .remove-btn {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #ff4757;
+            color: white;
+            border: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+            line-height: 1;
+        }
+        .image-btn {
+            background: transparent;
+            color: #4ecca3;
+            border: none;
+            padding: 4px 8px;
+            margin: 0;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            line-height: 1;
+        }
+        .image-btn:hover {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 8px;
+        }
+        .modal .close-btn {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            background: transparent;
+            color: white;
+            border: none;
+            font-size: 36px;
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+        }
         @media (max-width: 600px) {
             th, td {
                 padding: 6px 4px;
@@ -389,7 +488,17 @@
         <!-- Analyze Meal -->
         <div class="card" id="analyze-card">
             <h2>Log Meal</h2>
-            <textarea id="meal-input" placeholder="Describe your meal, e.g.: 4 eggs, 50g cheese, 2 slices of bread with butter"></textarea>
+            <div class="input-row">
+                <textarea id="meal-input" placeholder="Describe your meal, e.g.: 4 eggs, 50g cheese, 2 slices of bread with butter"></textarea>
+                <label class="upload-btn" title="Upload photo">
+                    <input type="file" id="image-input" accept="image/*" onchange="handleImageSelect(event)">
+                    &#x1F4F7;
+                </label>
+            </div>
+            <div id="image-preview" class="image-preview hidden">
+                <img id="preview-img" src="" alt="Preview">
+                <button class="remove-btn" onclick="removeImage()">&times;</button>
+            </div>
             <button id="analyze-btn" onclick="analyzeMeal()">Analyze</button>
 
             <div id="analysis-result" class="hidden">
@@ -434,10 +543,17 @@
         </div>
     </div>
 
+    <!-- Image Viewer Modal -->
+    <div id="image-modal" class="modal" onclick="closeImageModal()">
+        <button class="close-btn">&times;</button>
+        <img id="modal-image" src="" alt="Meal photo">
+    </div>
+
     <script>
         let currentAnalysis = null;
         let currentDescription = '';
         let currentDate = new Date();
+        let currentImageFile = null;
 
         function getDateString(date) {
             // Use local date components to avoid UTC timezone shift
@@ -582,14 +698,21 @@
                     const copyBtn = showCopyBtn
                         ? `<button class="copy-btn" onclick="copyMeal(${meal.id})" title="Copy to today">&#x2398;</button>`
                         : '';
+                    const imageBtn = meal.has_image
+                        ? `<button class="image-btn" onclick="viewMealImage(${meal.id})" title="View photo">&#x1F4F7;</button>`
+                        : '';
+                    // Use short name if available, otherwise truncate description
+                    const displayName = meal.name || truncateText(meal.description, 30);
+                    const fullDesc = meal.description;
                     return `
                         <div class="meal-item">
                             <div>
-                                <div class="desc">${escapeHtml(meal.description)}</div>
+                                <div class="desc" title="${escapeHtml(fullDesc)}">${escapeHtml(displayName)}</div>
                                 <div class="time">${time}</div>
                             </div>
                             <div class="right">
                                 <div class="macros">${meal.total_calories} kcal</div>
+                                ${imageBtn}
                                 ${copyBtn}
                                 <button class="delete-btn" onclick="deleteMeal(${meal.id})" title="Delete meal">&times;</button>
                             </div>
@@ -684,7 +807,9 @@
         async function analyzeMeal() {
             const input = document.getElementById('meal-input');
             const description = input.value.trim();
-            if (!description) return;
+
+            // Need either description or image
+            if (!description && !currentImageFile) return;
 
             const btn = document.getElementById('analyze-btn');
             const loading = document.getElementById('analysis-loading');
@@ -697,11 +822,23 @@
             result.classList.add('hidden');
 
             try {
-                const res = await fetch('/api/analyze', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({description})
-                });
+                let res;
+                if (currentImageFile) {
+                    // Use image analysis endpoint
+                    const formData = new FormData();
+                    formData.append('file', currentImageFile);
+                    res = await fetch('/api/analyze/image', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    // Use text analysis endpoint
+                    res = await fetch('/api/analyze', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({description})
+                    });
+                }
 
                 if (!res.ok) {
                     const errData = await res.json().catch(() => ({}));
@@ -710,11 +847,12 @@
 
                 const data = await res.json();
                 currentAnalysis = data;
-                currentDescription = description;
+                // Use meal_name from AI or fallback to text description
+                currentDescription = description || data.meal_name || 'Meal from photo';
                 renderAnalysis(data);
                 result.classList.remove('hidden');
             } catch (e) {
-                error.textContent = 'Failed to analyze meal. Please try again.';
+                error.textContent = e.message || 'Failed to analyze meal. Please try again.';
                 error.classList.remove('hidden');
             } finally {
                 btn.disabled = false;
@@ -758,16 +896,37 @@
             }
 
             try {
-                const res = await fetch('/api/meals', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        description: currentDescription,
-                        items: currentAnalysis.items,
-                        totals: currentAnalysis.totals,
-                        date: getDateString(new Date())
-                    })
-                });
+                let res;
+                if (currentImageFile) {
+                    // Use multipart form endpoint for meals with images
+                    const formData = new FormData();
+                    formData.append('description', currentDescription);
+                    formData.append('items', JSON.stringify(currentAnalysis.items));
+                    formData.append('totals', JSON.stringify(currentAnalysis.totals));
+                    formData.append('date', getDateString(new Date()));
+                    if (currentAnalysis.meal_name) {
+                        formData.append('meal_name', currentAnalysis.meal_name);
+                    }
+                    formData.append('image', currentImageFile);
+
+                    res = await fetch('/api/meals/with-image', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    // Use JSON endpoint for text-only meals
+                    res = await fetch('/api/meals', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            description: currentDescription,
+                            items: currentAnalysis.items,
+                            totals: currentAnalysis.totals,
+                            date: getDateString(new Date()),
+                            meal_name: currentAnalysis.meal_name
+                        })
+                    });
+                }
 
                 if (!res.ok) {
                     const errData = await res.json().catch(() => ({}));
@@ -785,7 +944,10 @@
         function clearAnalysis() {
             currentAnalysis = null;
             currentDescription = '';
+            currentImageFile = null;
             document.getElementById('meal-input').value = '';
+            document.getElementById('image-input').value = '';
+            document.getElementById('image-preview').classList.add('hidden');
             document.getElementById('analysis-result').classList.add('hidden');
             document.getElementById('analysis-error').classList.add('hidden');
         }
@@ -813,10 +975,50 @@
             }
         }
 
+        // Image handling functions
+        function handleImageSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            currentImageFile = file;
+
+            // Show preview
+            const preview = document.getElementById('image-preview');
+            const previewImg = document.getElementById('preview-img');
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                previewImg.src = e.target.result;
+                preview.classList.remove('hidden');
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function removeImage() {
+            currentImageFile = null;
+            document.getElementById('image-input').value = '';
+            document.getElementById('image-preview').classList.add('hidden');
+        }
+
+        function viewMealImage(mealId) {
+            const modal = document.getElementById('image-modal');
+            const modalImg = document.getElementById('modal-image');
+            modalImg.src = `/api/meals/${mealId}/image`;
+            modal.classList.add('active');
+        }
+
+        function closeImageModal() {
+            document.getElementById('image-modal').classList.remove('active');
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function truncateText(text, maxLen) {
+            if (!text || text.length <= maxLen) return text;
+            return text.substring(0, maxLen - 1) + '…';
         }
 
         // Handle Enter key in textarea
@@ -832,6 +1034,18 @@
                 e.preventDefault();
                 saveWeight();
             }
+        });
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeImageModal();
+            }
+        });
+
+        // Prevent modal image click from closing modal
+        document.getElementById('modal-image').addEventListener('click', (e) => {
+            e.stopPropagation();
         });
 
         // Initial load

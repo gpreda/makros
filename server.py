@@ -1,6 +1,7 @@
 """FastAPI server for makros."""
 
 import ast
+import base64
 import json
 import os
 import time
@@ -9,9 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from google import genai
 
@@ -27,6 +28,7 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     items: list[dict]
     totals: dict
+    meal_name: Optional[str] = None
 
 
 class LogMealRequest(BaseModel):
@@ -34,6 +36,7 @@ class LogMealRequest(BaseModel):
     items: list[dict]
     totals: dict
     date: Optional[str] = None  # Browser's local date (YYYY-MM-DD)
+    meal_name: Optional[str] = None  # Short name for the meal
 
 
 class ItemCreate(BaseModel):
@@ -317,8 +320,12 @@ For each item, provide:
 - fiber: grams (float)
 - alcohol: grams (float) - only for alcoholic beverages, 0 otherwise
 
+Also provide a SHORT meal name (max 30 chars) that summarizes the meal.
+Examples: "Eggs & Toast", "Big Mac Meal", "Chicken Salad", "Whiskey", "Steak Dinner"
+
 Respond with ONLY a Python dictionary in this exact format:
 {{
+    'meal_name': 'Eggs & Toast',
     'items': [
         {{'name': 'McDonald\\'s Double Cheeseburger', 'amount': 1, 'unit': 'item', 'calories': 450, 'protein': 25.0, 'carbs': 34.0, 'fat': 24.0, 'fiber': 2.0, 'alcohol': 0.0}},
         ...
@@ -366,8 +373,123 @@ Return ONLY the dictionary, no other text or markdown.
 
         return AnalyzeResponse(
             items=processed_items,
-            totals=totals
+            totals=totals,
+            meal_name=result.get('meal_name')
         )
+    except (SyntaxError, ValueError) as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
+
+
+@app.post("/api/analyze/image", response_model=AnalyzeResponse)
+async def analyze_image(file: UploadFile = File(...)):
+    """Analyze a meal image and return nutritional breakdown."""
+    client = get_genai_client()
+
+    # Read and encode image
+    image_bytes = await file.read()
+    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+
+    # Determine mime type
+    content_type = file.content_type or 'image/jpeg'
+    if content_type not in ['image/jpeg', 'image/png', 'image/webp', 'image/gif']:
+        content_type = 'image/jpeg'
+
+    units_list = ', '.join(VALID_UNITS)
+    prompt = f"""
+Analyze this food image and provide a nutritional breakdown.
+
+IMPORTANT: First determine if this image contains food.
+- If NO food is visible, respond with: {{'no_food': true, 'message': 'No food detected in image'}}
+- If food IS visible, provide the full nutritional analysis below.
+
+For each food item visible, provide:
+- name: item name (string) - be specific (e.g., "grilled chicken breast" not just "chicken")
+- amount: estimated numeric quantity (float) - estimate based on visual size
+- unit: one of [{units_list}] - use 'g' for most items, 'item' for countable items
+- calories: estimated kcal (int)
+- protein: estimated grams (float)
+- carbs: estimated grams (float)
+- fat: estimated grams (float)
+- fiber: estimated grams (float)
+- alcohol: grams (float) - only for alcoholic beverages, 0 otherwise
+
+Also provide a SHORT meal name (max 30 chars) that summarizes the meal.
+Examples: "Grilled Chicken Salad", "Burger & Fries", "Pasta Bolognese"
+
+Respond with ONLY a Python dictionary in this exact format:
+{{
+    'meal_name': 'Grilled Chicken Plate',
+    'items': [
+        {{'name': 'grilled chicken breast', 'amount': 150, 'unit': 'g', 'calories': 248, 'protein': 46.0, 'carbs': 0.0, 'fat': 5.4, 'fiber': 0.0, 'alcohol': 0.0}},
+        ...
+    ],
+    'totals': {{'calories': 456, 'protein': 50.0, 'carbs': 20.0, 'fat': 15.0, 'fiber': 3.0, 'alcohol': 0.0}}
+}}
+
+Be accurate with portion size estimates based on visual cues.
+Return ONLY the dictionary, no other text or markdown.
+"""
+
+    model_name = 'gemini-2.0-flash'
+    start_time = time.time()
+
+    # Create the image part for Gemini
+    image_part = {
+        'inline_data': {
+            'mime_type': content_type,
+            'data': image_base64
+        }
+    }
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[image_part, prompt]
+    )
+    model_ms = int((time.time() - start_time) * 1000)
+
+    text = response.text.strip()
+    text = text.replace('```python', '').replace('```', '').strip()
+
+    # Get token usage if available
+    model_tokens = None
+    if hasattr(response, 'usage_metadata') and response.usage_metadata:
+        model_tokens = getattr(response.usage_metadata, 'total_token_count', None)
+
+    try:
+        result = ast.literal_eval(text)
+
+        # Check if no food was detected
+        if result.get('no_food'):
+            log_event('meal.analyze.image',
+                      ai_used=True,
+                      model_name=model_name,
+                      model_tokens=model_tokens,
+                      model_ms=model_ms,
+                      no_food=True)
+            raise HTTPException(status_code=400, detail=result.get('message', 'No food detected in image'))
+
+        items = result.get('items', [])
+        totals = result.get('totals', {})
+
+        # Process items: check DB, save new items, handle name conflicts
+        processed_items = process_analyzed_items(items)
+
+        # Log the analysis event with AI tracking
+        log_event('meal.analyze.image',
+                  ai_used=True,
+                  model_name=model_name,
+                  model_tokens=model_tokens,
+                  model_ms=model_ms,
+                  item_count=len(processed_items),
+                  calories=totals.get('calories', 0))
+
+        return AnalyzeResponse(
+            items=processed_items,
+            totals=totals,
+            meal_name=result.get('meal_name')
+        )
+    except HTTPException:
+        raise
     except (SyntaxError, ValueError) as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
 
@@ -385,7 +507,8 @@ async def log_meal_endpoint(request: LogMealRequest):
             now = datetime.now()
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
-        meal_id = storage.log_meal(request.description, request.items, request.totals, logged_at=meal_datetime)
+        meal_id = storage.log_meal(request.description, request.items, request.totals,
+                                   logged_at=meal_datetime, name=request.meal_name)
 
         # Log the meal logging event
         log_event('meal.log',
@@ -400,6 +523,58 @@ async def log_meal_endpoint(request: LogMealRequest):
         return {"id": meal_id, "message": "Meal logged successfully"}
     except Exception as e:
         print(f"Error logging meal: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to log meal: {str(e)}")
+
+
+@app.post("/api/meals/with-image")
+async def log_meal_with_image(
+    description: str = Form(...),
+    items: str = Form(...),  # JSON string
+    totals: str = Form(...),  # JSON string
+    date: Optional[str] = Form(None),
+    meal_name: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None)
+):
+    """Log a meal with an optional image."""
+    try:
+        storage = get_storage()
+
+        # Parse JSON strings
+        items_list = json.loads(items)
+        totals_dict = json.loads(totals)
+
+        # Use browser's date if provided
+        meal_datetime = None
+        if date:
+            meal_date = datetime.fromisoformat(date)
+            now = datetime.now()
+            meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
+
+        # Read image data if provided
+        image_data = None
+        if image:
+            image_data = await image.read()
+
+        meal_id = storage.log_meal(description, items_list, totals_dict,
+                                   logged_at=meal_datetime, name=meal_name,
+                                   image_data=image_data)
+
+        # Log the meal logging event
+        log_event('meal.log',
+                  meal_id=meal_id,
+                  description=description,
+                  item_count=len(items_list),
+                  has_image=image_data is not None,
+                  calories=totals_dict.get('calories', 0),
+                  protein=totals_dict.get('protein', 0),
+                  carbs=totals_dict.get('carbs', 0),
+                  fat=totals_dict.get('fat', 0))
+
+        return {"id": meal_id, "message": "Meal logged successfully"}
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+    except Exception as e:
+        print(f"Error logging meal with image: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to log meal: {str(e)}")
 
 
@@ -423,6 +598,15 @@ async def get_meal(meal_id: int):
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
     return meal
+
+
+@app.get("/api/meals/{meal_id}/image")
+async def get_meal_image(meal_id: int):
+    """Get the image for a meal."""
+    image_data = get_storage().get_meal_image(meal_id)
+    if not image_data:
+        raise HTTPException(status_code=404, detail="No image found for this meal")
+    return Response(content=image_data, media_type="image/jpeg")
 
 
 @app.delete("/api/meals/{meal_id}")
