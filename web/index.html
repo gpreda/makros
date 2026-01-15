@@ -420,6 +420,35 @@
             padding: 0;
             margin: 0;
         }
+        .amount-input {
+            width: 50px;
+            padding: 4px 6px;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #4ecca3;
+            font-size: 14px;
+            text-align: center;
+        }
+        .amount-input:focus {
+            outline: none;
+            border-color: #3db892;
+        }
+        .row-delete-btn {
+            background: transparent;
+            color: #666;
+            border: none;
+            padding: 2px 6px;
+            margin: 0;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 4px;
+            line-height: 1;
+        }
+        .row-delete-btn:hover {
+            background: #ff4757;
+            color: white;
+        }
         @media (max-width: 600px) {
             th, td {
                 padding: 6px 4px;
@@ -512,6 +541,7 @@
                             <th>C</th>
                             <th>F</th>
                             <th>Alc</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody id="analysis-table"></tbody>
@@ -861,16 +891,36 @@
         }
 
         function renderAnalysis(data) {
+            // Store per-unit macros for recalculation
+            data.items.forEach(item => {
+                if (!item._perUnit) {
+                    const amt = item.amount || 1;
+                    item._perUnit = {
+                        calories: item.calories / amt,
+                        protein: item.protein / amt,
+                        carbs: item.carbs / amt,
+                        fat: item.fat / amt,
+                        fiber: (item.fiber || 0) / amt,
+                        alcohol: (item.alcohol || 0) / amt
+                    };
+                }
+            });
+
             const tbody = document.getElementById('analysis-table');
-            const rows = data.items.map(item => `
-                <tr>
+            const rows = data.items.map((item, idx) => `
+                <tr data-idx="${idx}">
                     <td>${escapeHtml(item.name)}</td>
-                    <td>${item.amount} ${item.unit}</td>
-                    <td>${item.calories}</td>
-                    <td>${item.protein.toFixed(1)}</td>
-                    <td>${item.carbs.toFixed(1)}</td>
-                    <td>${item.fat.toFixed(1)}</td>
-                    <td>${(item.alcohol || 0).toFixed(1)}</td>
+                    <td>
+                        <input type="number" class="amount-input" value="${item.amount}"
+                               min="0" step="0.1" onchange="updateItemAmount(${idx}, this.value)">
+                        ${item.unit}
+                    </td>
+                    <td class="cal-cell">${Math.round(item.calories)}</td>
+                    <td class="p-cell">${item.protein.toFixed(1)}</td>
+                    <td class="c-cell">${item.carbs.toFixed(1)}</td>
+                    <td class="f-cell">${item.fat.toFixed(1)}</td>
+                    <td class="a-cell">${(item.alcohol || 0).toFixed(1)}</td>
+                    <td><button class="row-delete-btn" onclick="removeItem(${idx})" title="Remove">&times;</button></td>
                 </tr>
             `).join('');
 
@@ -878,15 +928,72 @@
             const totalsRow = `
                 <tr class="totals">
                     <td colspan="2">Total</td>
-                    <td>${totals.calories}</td>
-                    <td>${totals.protein.toFixed(1)}</td>
-                    <td>${totals.carbs.toFixed(1)}</td>
-                    <td>${totals.fat.toFixed(1)}</td>
-                    <td>${(totals.alcohol || 0).toFixed(1)}</td>
+                    <td id="total-cal">${Math.round(totals.calories)}</td>
+                    <td id="total-p">${totals.protein.toFixed(1)}</td>
+                    <td id="total-c">${totals.carbs.toFixed(1)}</td>
+                    <td id="total-f">${totals.fat.toFixed(1)}</td>
+                    <td id="total-a">${(totals.alcohol || 0).toFixed(1)}</td>
+                    <td></td>
                 </tr>
             `;
 
             tbody.innerHTML = rows + totalsRow;
+        }
+
+        function updateItemAmount(idx, newAmount) {
+            const item = currentAnalysis.items[idx];
+            const amount = parseFloat(newAmount) || 0;
+            item.amount = amount;
+
+            // Recalculate macros based on per-unit values
+            item.calories = item._perUnit.calories * amount;
+            item.protein = item._perUnit.protein * amount;
+            item.carbs = item._perUnit.carbs * amount;
+            item.fat = item._perUnit.fat * amount;
+            item.fiber = item._perUnit.fiber * amount;
+            item.alcohol = item._perUnit.alcohol * amount;
+
+            // Update the row display
+            const row = document.querySelector(`tr[data-idx="${idx}"]`);
+            if (row) {
+                row.querySelector('.cal-cell').textContent = Math.round(item.calories);
+                row.querySelector('.p-cell').textContent = item.protein.toFixed(1);
+                row.querySelector('.c-cell').textContent = item.carbs.toFixed(1);
+                row.querySelector('.f-cell').textContent = item.fat.toFixed(1);
+                row.querySelector('.a-cell').textContent = item.alcohol.toFixed(1);
+            }
+
+            recalculateTotals();
+        }
+
+        function removeItem(idx) {
+            currentAnalysis.items.splice(idx, 1);
+            recalculateTotals();
+            renderAnalysis(currentAnalysis);
+        }
+
+        function recalculateTotals() {
+            const totals = currentAnalysis.items.reduce((acc, item) => {
+                acc.calories += item.calories || 0;
+                acc.protein += item.protein || 0;
+                acc.carbs += item.carbs || 0;
+                acc.fat += item.fat || 0;
+                acc.fiber += item.fiber || 0;
+                acc.alcohol += item.alcohol || 0;
+                return acc;
+            }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0});
+
+            currentAnalysis.totals = totals;
+
+            // Update totals row
+            const totalCal = document.getElementById('total-cal');
+            if (totalCal) {
+                totalCal.textContent = Math.round(totals.calories);
+                document.getElementById('total-p').textContent = totals.protein.toFixed(1);
+                document.getElementById('total-c').textContent = totals.carbs.toFixed(1);
+                document.getElementById('total-f').textContent = totals.fat.toFixed(1);
+                document.getElementById('total-a').textContent = totals.alcohol.toFixed(1);
+            }
         }
 
         async function logMeal() {
