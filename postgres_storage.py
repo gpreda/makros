@@ -297,19 +297,30 @@ class PostgresStorage:
         )
 
     # Meal operations
-    def log_meal(self, description: str, items: list[dict], totals: dict) -> int:
+    def log_meal(self, description: str, items: list[dict], totals: dict,
+                 logged_at: Optional[datetime] = None) -> int:
         """Log a meal with its items. Returns meal id."""
         try:
             with self.conn.cursor() as cur:
-                # Insert meal
-                cur.execute("""
-                    INSERT INTO meals (description, total_calories, total_protein,
-                                       total_carbs, total_fat, total_fiber, total_alcohol)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (description, totals.get('calories'), totals.get('protein'),
-                      totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                      totals.get('alcohol', 0)))
+                # Insert meal with explicit timestamp if provided
+                if logged_at:
+                    cur.execute("""
+                        INSERT INTO meals (description, total_calories, total_protein,
+                                           total_carbs, total_fat, total_fiber, total_alcohol, logged_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (description, totals.get('calories'), totals.get('protein'),
+                          totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
+                          totals.get('alcohol', 0), logged_at))
+                else:
+                    cur.execute("""
+                        INSERT INTO meals (description, total_calories, total_protein,
+                                           total_carbs, total_fat, total_fiber, total_alcohol)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (description, totals.get('calories'), totals.get('protein'),
+                          totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
+                          totals.get('alcohol', 0)))
                 meal_id = cur.fetchone()[0]
 
                 # Insert meal items

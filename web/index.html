@@ -764,7 +764,8 @@
             const payload = {
                 description: currentDescription,
                 items: currentAnalysis.items,
-                totals: currentAnalysis.totals
+                totals: currentAnalysis.totals,
+                date: getDateString(new Date())  // Send browser's current date
             };
             console.log('[DEBUG] Sending meal payload:', payload);
 

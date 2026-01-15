@@ -33,6 +33,7 @@ class LogMealRequest(BaseModel):
     description: str
     items: list[dict]
     totals: dict
+    date: Optional[str] = None  # Browser's local date (YYYY-MM-DD)
 
 
 class ItemCreate(BaseModel):
@@ -378,24 +379,33 @@ Return ONLY the dictionary, no other text or markdown.
 @app.post("/api/meals")
 async def log_meal_endpoint(request: LogMealRequest):
     """Log a meal to the database."""
-    print(f"[DEBUG] log_meal_endpoint called: description={request.description}, items={len(request.items)}, totals={request.totals}")
+    print(f"[DEBUG] log_meal_endpoint called: description={request.description}, items={len(request.items)}, totals={request.totals}, date={request.date}")
     try:
         storage = get_storage()
-        today = datetime.now()
-        today_str = today.strftime('%Y-%m-%d')
 
-        print(f"[DEBUG] Server datetime.now() = {today}, date string = {today_str}")
+        # Use browser's date if provided, otherwise fall back to server time
+        if request.date:
+            # Parse the date and set time to current time of day
+            meal_date = datetime.fromisoformat(request.date)
+            # Add current time so meals are ordered correctly within a day
+            now = datetime.now()
+            meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
+            print(f"[DEBUG] Using browser date: {request.date} -> {meal_datetime}")
+        else:
+            meal_datetime = None
+            print(f"[DEBUG] No browser date provided, using server default")
 
-        # Count meals before insert
-        meals_before = storage.get_meals(limit=1000, date=today)
+        # Count meals before insert (using the target date)
+        target_date = meal_datetime if meal_datetime else datetime.now()
+        meals_before = storage.get_meals(limit=1000, date=target_date)
         count_before = len(meals_before)
-        print(f"[DEBUG] Meals for today ({today_str}) BEFORE insert: {count_before}")
+        print(f"[DEBUG] Meals for {target_date.strftime('%Y-%m-%d')} BEFORE insert: {count_before}")
 
-        meal_id = storage.log_meal(request.description, request.items, request.totals)
+        meal_id = storage.log_meal(request.description, request.items, request.totals, logged_at=meal_datetime)
         print(f"[DEBUG] Meal logged successfully with id={meal_id}")
 
         # Count meals after insert
-        meals_after = storage.get_meals(limit=1000, date=today)
+        meals_after = storage.get_meals(limit=1000, date=target_date)
         count_after = len(meals_after)
         print(f"[DEBUG] Meals for today AFTER insert: {count_after}")
 
