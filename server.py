@@ -3,6 +3,7 @@
 import ast
 import json
 import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -116,12 +117,16 @@ def get_session_id(user_id: str = DEFAULT_USER) -> str:
     return _user_sessions[user_id]
 
 
-def log_event(event: str, user_id: str = DEFAULT_USER, **data) -> None:
+def log_event(event: str, user_id: str = DEFAULT_USER,
+              ai_used: bool = False, model_name: str = None,
+              model_tokens: int = None, model_ms: int = None, **data) -> None:
     """Log an event to the database."""
     storage = get_storage()
     if storage:
         session_id = get_session_id(user_id)
-        storage.log_event(event, user_id, session_id, **data)
+        storage.log_event(event, user_id, session_id,
+                          ai_used=ai_used, model_name=model_name,
+                          model_tokens=model_tokens, model_ms=model_ms, **data)
 
 
 @app.on_event("startup")
@@ -324,12 +329,21 @@ Be accurate with portion sizes. Use standard nutritional databases as reference.
 Return ONLY the dictionary, no other text or markdown.
 """
 
+    model_name = 'gemini-2.0-flash'
+    start_time = time.time()
     response = client.models.generate_content(
-        model='gemini-2.0-flash',
+        model=model_name,
         contents=prompt
     )
+    model_ms = int((time.time() - start_time) * 1000)
+
     text = response.text.strip()
     text = text.replace('```python', '').replace('```', '').strip()
+
+    # Get token usage if available
+    model_tokens = None
+    if hasattr(response, 'usage_metadata') and response.usage_metadata:
+        model_tokens = getattr(response.usage_metadata, 'total_token_count', None)
 
     try:
         result = ast.literal_eval(text)
@@ -342,8 +356,12 @@ Return ONLY the dictionary, no other text or markdown.
         processed_items = process_analyzed_items(items)
         print(f"[DEBUG] Processed items: {processed_items}")
 
-        # Log the analysis event
+        # Log the analysis event with AI tracking
         log_event('meal.analyze',
+                  ai_used=True,
+                  model_name=model_name,
+                  model_tokens=model_tokens,
+                  model_ms=model_ms,
                   description=request.description,
                   item_count=len(processed_items),
                   calories=totals.get('calories', 0))
@@ -611,20 +629,33 @@ Return ONLY the dictionary, no other text.
 """
 
     try:
+        model_name = 'gemini-2.0-flash'
+        start_time = time.time()
         response = client.models.generate_content(
-            model='gemini-2.0-flash',
+            model=model_name,
             contents=prompt
         )
+        model_ms = int((time.time() - start_time) * 1000)
+
         text = response.text.strip()
         text = text.replace('```python', '').replace('```', '').strip()
         result = ast.literal_eval(text)
+
+        # Get token usage if available
+        model_tokens = None
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            model_tokens = getattr(response.usage_metadata, 'total_token_count', None)
 
         per_100g = result.get('per_100g', {})
         per_item = result.get('per_item')
         confidence = result.get('confidence', 0)
 
-        # Log the suggestion event
+        # Log the suggestion event with AI tracking
         log_event('item.suggest',
+                  ai_used=True,
+                  model_name=model_name,
+                  model_tokens=model_tokens,
+                  model_ms=model_ms,
                   name=request.name,
                   confidence=confidence,
                   recognized=result.get('recognized', False))
