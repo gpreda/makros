@@ -406,37 +406,48 @@ Use this hint to better identify items, quantities, or specific products in the 
 
     units_list = ', '.join(VALID_UNITS)
     prompt = f"""
-Analyze this food image and provide a nutritional breakdown.
+Analyze this image and provide a nutritional breakdown.
 {hint_section}
-IMPORTANT: First determine if this image contains food.
-- If NO food is visible, respond with: {{'no_food': true, 'message': 'No food detected in image'}}
-- If food IS visible, provide the full nutritional analysis below.
+IMPORTANT: First determine what type of image this is:
+1. NUTRITION LABEL - If this is a photo of a nutrition facts label, extract the values directly from the label
+2. FOOD PHOTO - If this shows actual food, estimate the nutritional content
+3. NO FOOD - If neither food nor nutrition label is visible, respond with: {{'no_food': true, 'message': 'No food or nutrition label detected'}}
 
-For each food item visible, provide:
-- name: item name (string) - be specific (e.g., "grilled chicken breast" not just "chicken")
-- amount: estimated numeric quantity (float) - estimate based on visual size
-- unit: one of [{units_list}] - use 'g' for most items, 'item' for countable items
-- calories: estimated kcal (int)
-- protein: estimated grams (float)
-- carbs: estimated grams (float)
-- fat: estimated grams (float)
-- fiber: estimated grams (float)
+FOR NUTRITION LABELS:
+- Read the serving size and use it as the amount
+- Extract calories, protein, carbs, fat, fiber directly from the label
+- Use the product name from the package if visible, otherwise use a descriptive name
+- The hint text may contain the product name or number of servings
+
+FOR FOOD PHOTOS:
+- Identify each food item visible
+- Estimate portions based on visual size
+- Be specific with names (e.g., "grilled chicken breast" not just "chicken")
+
+For each item, provide:
+- name: item name (string)
+- amount: numeric quantity (float) - from label serving size or visual estimate
+- unit: one of [{units_list}] - use 'g' or 'serving' as appropriate
+- calories: kcal (int)
+- protein: grams (float)
+- carbs: grams (float)
+- fat: grams (float)
+- fiber: grams (float)
 - alcohol: grams (float) - only for alcoholic beverages, 0 otherwise
 
-Also provide a SHORT meal name (max 30 chars) that summarizes the meal.
-Examples: "Grilled Chicken Salad", "Burger & Fries", "Pasta Bolognese"
+Also provide a SHORT meal name (max 30 chars).
+Examples: "Grilled Chicken Salad", "Protein Bar", "Greek Yogurt"
 
 Respond with ONLY a Python dictionary in this exact format:
 {{
-    'meal_name': 'Grilled Chicken Plate',
+    'meal_name': 'Protein Bar',
     'items': [
-        {{'name': 'grilled chicken breast', 'amount': 150, 'unit': 'g', 'calories': 248, 'protein': 46.0, 'carbs': 0.0, 'fat': 5.4, 'fiber': 0.0, 'alcohol': 0.0}},
+        {{'name': 'Kind Protein Bar', 'amount': 1, 'unit': 'item', 'calories': 250, 'protein': 12.0, 'carbs': 18.0, 'fat': 17.0, 'fiber': 5.0, 'alcohol': 0.0}},
         ...
     ],
-    'totals': {{'calories': 456, 'protein': 50.0, 'carbs': 20.0, 'fat': 15.0, 'fiber': 3.0, 'alcohol': 0.0}}
+    'totals': {{'calories': 250, 'protein': 12.0, 'carbs': 18.0, 'fat': 17.0, 'fiber': 5.0, 'alcohol': 0.0}}
 }}
 
-Be accurate with portion size estimates based on visual cues.
 Return ONLY the dictionary, no other text or markdown.
 """
 
