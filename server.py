@@ -319,6 +319,12 @@ For each item, provide:
 - fat: grams (float)
 - fiber: grams (float)
 - alcohol: grams (float) - only for alcoholic beverages, 0 otherwise
+- saturated_fat: grams (float) - saturated fat
+- trans_fat: grams (float) - trans fat
+- cholesterol: mg (float) - cholesterol in milligrams
+- sodium: mg (float) - sodium in milligrams
+- potassium: mg (float) - potassium in milligrams
+- added_sugar: grams (float) - added sugars
 
 Also provide a SHORT meal name (max 30 chars) that summarizes the meal.
 Examples: "Eggs & Toast", "Big Mac Meal", "Chicken Salad", "Whiskey", "Steak Dinner"
@@ -327,10 +333,10 @@ Respond with ONLY a Python dictionary in this exact format:
 {{
     'meal_name': 'Eggs & Toast',
     'items': [
-        {{'name': 'McDonald\\'s Double Cheeseburger', 'amount': 1, 'unit': 'item', 'calories': 450, 'protein': 25.0, 'carbs': 34.0, 'fat': 24.0, 'fiber': 2.0, 'alcohol': 0.0}},
+        {{'name': 'McDonald\\'s Double Cheeseburger', 'amount': 1, 'unit': 'item', 'calories': 450, 'protein': 25.0, 'carbs': 34.0, 'fat': 24.0, 'fiber': 2.0, 'alcohol': 0.0, 'saturated_fat': 11.0, 'trans_fat': 1.5, 'cholesterol': 85.0, 'sodium': 1050.0, 'potassium': 250.0, 'added_sugar': 7.0}},
         ...
     ],
-    'totals': {{'calories': 456, 'protein': 25.0, 'carbs': 30.0, 'fat': 20.0, 'fiber': 3.0, 'alcohol': 0.0}}
+    'totals': {{'calories': 456, 'protein': 25.0, 'carbs': 30.0, 'fat': 20.0, 'fiber': 3.0, 'alcohol': 0.0, 'saturated_fat': 11.0, 'trans_fat': 1.5, 'cholesterol': 85.0, 'sodium': 1050.0, 'potassium': 250.0, 'added_sugar': 7.0}}
 }}
 
 Be accurate with portion sizes. Use standard nutritional databases as reference.
@@ -434,6 +440,12 @@ For each item, provide:
 - fat: grams (float)
 - fiber: grams (float)
 - alcohol: grams (float) - only for alcoholic beverages, 0 otherwise
+- saturated_fat: grams (float) - saturated fat
+- trans_fat: grams (float) - trans fat
+- cholesterol: mg (float) - cholesterol in milligrams
+- sodium: mg (float) - sodium in milligrams
+- potassium: mg (float) - potassium in milligrams
+- added_sugar: grams (float) - added sugars
 
 Also provide a SHORT meal name (max 30 chars).
 Examples: "Grilled Chicken Salad", "Protein Bar", "Greek Yogurt"
@@ -442,10 +454,10 @@ Respond with ONLY a Python dictionary in this exact format:
 {{
     'meal_name': 'Protein Bar',
     'items': [
-        {{'name': 'Kind Protein Bar', 'amount': 1, 'unit': 'item', 'calories': 250, 'protein': 12.0, 'carbs': 18.0, 'fat': 17.0, 'fiber': 5.0, 'alcohol': 0.0}},
+        {{'name': 'Kind Protein Bar', 'amount': 1, 'unit': 'item', 'calories': 250, 'protein': 12.0, 'carbs': 18.0, 'fat': 17.0, 'fiber': 5.0, 'alcohol': 0.0, 'saturated_fat': 3.5, 'trans_fat': 0.0, 'cholesterol': 0.0, 'sodium': 125.0, 'potassium': 200.0, 'added_sugar': 5.0}},
         ...
     ],
-    'totals': {{'calories': 250, 'protein': 12.0, 'carbs': 18.0, 'fat': 17.0, 'fiber': 5.0, 'alcohol': 0.0}}
+    'totals': {{'calories': 250, 'protein': 12.0, 'carbs': 18.0, 'fat': 17.0, 'fiber': 5.0, 'alcohol': 0.0, 'saturated_fat': 3.5, 'trans_fat': 0.0, 'cholesterol': 0.0, 'sodium': 125.0, 'potassium': 200.0, 'added_sugar': 5.0}}
 }}
 
 Return ONLY the dictionary, no other text or markdown.

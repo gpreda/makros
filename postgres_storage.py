@@ -137,6 +137,23 @@ class PostgresStorage:
                     END IF;
                 END $$;
             """)
+            # Add extended nutrition columns to meals (migration)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'meals' AND column_name = 'total_saturated_fat'
+                    ) THEN
+                        ALTER TABLE meals ADD COLUMN total_saturated_fat REAL DEFAULT 0;
+                        ALTER TABLE meals ADD COLUMN total_trans_fat REAL DEFAULT 0;
+                        ALTER TABLE meals ADD COLUMN total_cholesterol REAL DEFAULT 0;
+                        ALTER TABLE meals ADD COLUMN total_sodium REAL DEFAULT 0;
+                        ALTER TABLE meals ADD COLUMN total_potassium REAL DEFAULT 0;
+                        ALTER TABLE meals ADD COLUMN total_added_sugar REAL DEFAULT 0;
+                    END IF;
+                END $$;
+            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_meals_logged_at
                 ON meals(logged_at)
@@ -168,6 +185,23 @@ class PostgresStorage:
                         WHERE table_name = 'meal_items' AND column_name = 'alcohol'
                     ) THEN
                         ALTER TABLE meal_items ADD COLUMN alcohol REAL DEFAULT 0;
+                    END IF;
+                END $$;
+            """)
+            # Add extended nutrition columns to meal_items (migration)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'meal_items' AND column_name = 'saturated_fat'
+                    ) THEN
+                        ALTER TABLE meal_items ADD COLUMN saturated_fat REAL DEFAULT 0;
+                        ALTER TABLE meal_items ADD COLUMN trans_fat REAL DEFAULT 0;
+                        ALTER TABLE meal_items ADD COLUMN cholesterol REAL DEFAULT 0;
+                        ALTER TABLE meal_items ADD COLUMN sodium REAL DEFAULT 0;
+                        ALTER TABLE meal_items ADD COLUMN potassium REAL DEFAULT 0;
+                        ALTER TABLE meal_items ADD COLUMN added_sugar REAL DEFAULT 0;
                     END IF;
                 END $$;
             """)
@@ -332,33 +366,48 @@ class PostgresStorage:
                     cur.execute("""
                         INSERT INTO meals (name, description, total_calories, total_protein,
                                            total_carbs, total_fat, total_fiber, total_alcohol,
+                                           total_saturated_fat, total_trans_fat, total_cholesterol,
+                                           total_sodium, total_potassium, total_added_sugar,
                                            logged_at, image_data)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (name, description, totals.get('calories'), totals.get('protein'),
                           totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                          totals.get('alcohol', 0), logged_at, image_data))
+                          totals.get('alcohol', 0), totals.get('saturated_fat', 0),
+                          totals.get('trans_fat', 0), totals.get('cholesterol', 0),
+                          totals.get('sodium', 0), totals.get('potassium', 0),
+                          totals.get('added_sugar', 0), logged_at, image_data))
                 else:
                     cur.execute("""
                         INSERT INTO meals (name, description, total_calories, total_protein,
-                                           total_carbs, total_fat, total_fiber, total_alcohol, image_data)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                           total_carbs, total_fat, total_fiber, total_alcohol,
+                                           total_saturated_fat, total_trans_fat, total_cholesterol,
+                                           total_sodium, total_potassium, total_added_sugar, image_data)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (name, description, totals.get('calories'), totals.get('protein'),
                           totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                          totals.get('alcohol', 0), image_data))
+                          totals.get('alcohol', 0), totals.get('saturated_fat', 0),
+                          totals.get('trans_fat', 0), totals.get('cholesterol', 0),
+                          totals.get('sodium', 0), totals.get('potassium', 0),
+                          totals.get('added_sugar', 0), image_data))
                 meal_id = cur.fetchone()[0]
 
                 # Insert meal items
                 for item in items:
                     cur.execute("""
                         INSERT INTO meal_items (meal_id, name, amount, unit,
-                                               calories, protein, carbs, fat, fiber, alcohol)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                               calories, protein, carbs, fat, fiber, alcohol,
+                                               saturated_fat, trans_fat, cholesterol,
+                                               sodium, potassium, added_sugar)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (meal_id, item.get('name'), item.get('amount'),
                           item.get('unit'), item.get('calories'),
                           item.get('protein'), item.get('carbs'),
-                          item.get('fat'), item.get('fiber'), item.get('alcohol', 0)))
+                          item.get('fat'), item.get('fiber'), item.get('alcohol', 0),
+                          item.get('saturated_fat', 0), item.get('trans_fat', 0),
+                          item.get('cholesterol', 0), item.get('sodium', 0),
+                          item.get('potassium', 0), item.get('added_sugar', 0)))
 
             self.conn.commit()
             return meal_id
@@ -429,6 +478,12 @@ class PostgresStorage:
                     COALESCE(SUM(total_fat), 0) as fat,
                     COALESCE(SUM(total_fiber), 0) as fiber,
                     COALESCE(SUM(total_alcohol), 0) as alcohol,
+                    COALESCE(SUM(total_saturated_fat), 0) as saturated_fat,
+                    COALESCE(SUM(total_trans_fat), 0) as trans_fat,
+                    COALESCE(SUM(total_cholesterol), 0) as cholesterol,
+                    COALESCE(SUM(total_sodium), 0) as sodium,
+                    COALESCE(SUM(total_potassium), 0) as potassium,
+                    COALESCE(SUM(total_added_sugar), 0) as added_sugar,
                     COUNT(*) as meal_count
                 FROM meals
                 WHERE DATE(logged_at) = DATE(%s)

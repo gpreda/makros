@@ -449,6 +449,31 @@
             background: #ff4757;
             color: white;
         }
+        .extended-nutrients {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #0f3460;
+        }
+        .mini-stat {
+            background: #0f3460;
+            padding: 6px 10px;
+            border-radius: 6px;
+            text-align: center;
+            min-width: 70px;
+        }
+        .mini-stat .value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #4ecca3;
+        }
+        .mini-stat .label {
+            font-size: 10px;
+            color: #666;
+            margin-top: 2px;
+        }
         @media (max-width: 600px) {
             th, td {
                 padding: 6px 4px;
@@ -503,6 +528,32 @@
                 <div class="stat-box">
                     <div class="value" id="daily-alcohol">-</div>
                     <div class="label">Alcohol (g)</div>
+                </div>
+            </div>
+            <div class="extended-nutrients" id="extended-nutrients">
+                <div class="mini-stat">
+                    <div class="value" id="daily-sat-fat">-</div>
+                    <div class="label">Sat Fat (g)</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="value" id="daily-trans-fat">-</div>
+                    <div class="label">Trans Fat (g)</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="value" id="daily-cholesterol">-</div>
+                    <div class="label">Cholest (mg)</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="value" id="daily-sodium">-</div>
+                    <div class="label">Sodium (mg)</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="value" id="daily-potassium">-</div>
+                    <div class="label">Potass (mg)</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="value" id="daily-added-sugar">-</div>
+                    <div class="label">Added Sugar (g)</div>
                 </div>
             </div>
             <div class="weight-row">
@@ -664,6 +715,13 @@
                 document.getElementById('daily-fat').textContent = Math.round(data.fat);
                 document.getElementById('daily-fiber').textContent = Math.round(data.fiber);
                 document.getElementById('daily-alcohol').textContent = Math.round(data.alcohol || 0);
+                // Extended nutrients
+                document.getElementById('daily-sat-fat').textContent = (data.saturated_fat || 0).toFixed(1);
+                document.getElementById('daily-trans-fat').textContent = (data.trans_fat || 0).toFixed(1);
+                document.getElementById('daily-cholesterol').textContent = Math.round(data.cholesterol || 0);
+                document.getElementById('daily-sodium').textContent = Math.round(data.sodium || 0);
+                document.getElementById('daily-potassium').textContent = Math.round(data.potassium || 0);
+                document.getElementById('daily-added-sugar').textContent = (data.added_sugar || 0).toFixed(1);
             } catch (e) {
                 console.error('Failed to load daily summary:', e);
             }
@@ -894,7 +952,7 @@
         }
 
         function renderAnalysis(data) {
-            // Store per-unit macros for recalculation
+            // Store per-unit macros for recalculation (including extended nutrients)
             data.items.forEach(item => {
                 if (!item._perUnit) {
                     const amt = item.amount || 1;
@@ -904,7 +962,13 @@
                         carbs: item.carbs / amt,
                         fat: item.fat / amt,
                         fiber: (item.fiber || 0) / amt,
-                        alcohol: (item.alcohol || 0) / amt
+                        alcohol: (item.alcohol || 0) / amt,
+                        saturated_fat: (item.saturated_fat || 0) / amt,
+                        trans_fat: (item.trans_fat || 0) / amt,
+                        cholesterol: (item.cholesterol || 0) / amt,
+                        sodium: (item.sodium || 0) / amt,
+                        potassium: (item.potassium || 0) / amt,
+                        added_sugar: (item.added_sugar || 0) / amt
                     };
                 }
             });
@@ -948,13 +1012,19 @@
             const amount = parseFloat(newAmount) || 0;
             item.amount = amount;
 
-            // Recalculate macros based on per-unit values
+            // Recalculate macros based on per-unit values (including extended nutrients)
             item.calories = item._perUnit.calories * amount;
             item.protein = item._perUnit.protein * amount;
             item.carbs = item._perUnit.carbs * amount;
             item.fat = item._perUnit.fat * amount;
             item.fiber = item._perUnit.fiber * amount;
             item.alcohol = item._perUnit.alcohol * amount;
+            item.saturated_fat = item._perUnit.saturated_fat * amount;
+            item.trans_fat = item._perUnit.trans_fat * amount;
+            item.cholesterol = item._perUnit.cholesterol * amount;
+            item.sodium = item._perUnit.sodium * amount;
+            item.potassium = item._perUnit.potassium * amount;
+            item.added_sugar = item._perUnit.added_sugar * amount;
 
             // Update the row display
             const row = document.querySelector(`tr[data-idx="${idx}"]`);
@@ -983,8 +1053,15 @@
                 acc.fat += item.fat || 0;
                 acc.fiber += item.fiber || 0;
                 acc.alcohol += item.alcohol || 0;
+                acc.saturated_fat += item.saturated_fat || 0;
+                acc.trans_fat += item.trans_fat || 0;
+                acc.cholesterol += item.cholesterol || 0;
+                acc.sodium += item.sodium || 0;
+                acc.potassium += item.potassium || 0;
+                acc.added_sugar += item.added_sugar || 0;
                 return acc;
-            }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0});
+            }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0,
+                saturated_fat: 0, trans_fat: 0, cholesterol: 0, sodium: 0, potassium: 0, added_sugar: 0});
 
             currentAnalysis.totals = totals;
 
