@@ -122,17 +122,15 @@ def get_session_id(user_id: str = DEFAULT_USER) -> str:
 
 
 def log_event(event: str, user_id: str = DEFAULT_USER,
-              ai_used: bool = False, model_name: str = None,
-              model_tokens: int = None, model_ms: int = None,
-              db_ms: int = None, **data) -> None:
+              ms: int = None, ai_used: bool = False, model_name: str = None,
+              model_tokens: int = None, model_ms: int = None, **data) -> None:
     """Log an event to the database."""
     storage = get_storage()
     if storage:
         session_id = get_session_id(user_id)
         storage.log_event(event, user_id, session_id,
-                          ai_used=ai_used, model_name=model_name,
-                          model_tokens=model_tokens, model_ms=model_ms,
-                          db_ms=db_ms, **data)
+                          ms=ms, ai_used=ai_used, model_name=model_name,
+                          model_tokens=model_tokens, model_ms=model_ms, **data)
 
 
 @app.on_event("startup")
@@ -549,7 +547,7 @@ async def log_meal_endpoint(request: LogMealRequest):
 
         # Log the meal logging event
         log_event('meal.log',
-                  db_ms=db_ms,
+                  ms=db_ms,
                   meal_id=meal_id,
                   description=request.description,
                   item_count=len(request.items),
@@ -601,7 +599,7 @@ async def log_meal_with_image(
 
         # Log the meal logging event
         log_event('meal.log',
-                  db_ms=db_ms,
+                  ms=db_ms,
                   meal_id=meal_id,
                   description=description,
                   item_count=len(items_list),
@@ -657,7 +655,7 @@ async def delete_meal(meal_id: int):
     deleted = get_storage().delete_meal(meal_id)
     db_ms = int((time.time() - db_start) * 1000)
     if deleted:
-        log_event('meal.delete', db_ms=db_ms, meal_id=meal_id)
+        log_event('meal.delete', ms=db_ms, meal_id=meal_id)
         return {"message": "Meal deleted"}
     raise HTTPException(status_code=404, detail="Meal not found")
 
@@ -676,7 +674,7 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
     updated = get_storage().update_meal_item(item_id, request.amount)
     db_ms = int((time.time() - db_start) * 1000)
     if updated:
-        log_event('meal_item.update', db_ms=db_ms, item_id=item_id, new_amount=request.amount)
+        log_event('meal_item.update', ms=db_ms, item_id=item_id, new_amount=request.amount)
         return updated
     raise HTTPException(status_code=404, detail="Meal item not found")
 
@@ -716,7 +714,7 @@ async def copy_meal(meal_id: int):
 
     # Log the copy event
     log_event('meal.copy',
-              db_ms=db_ms,
+              ms=db_ms,
               original_meal_id=meal_id,
               new_meal_id=new_meal_id,
               description=meal['description'],
@@ -783,7 +781,7 @@ async def set_weight(request: WeightRequest, date: Optional[str] = None):
     db_ms = int((time.time() - db_start) * 1000)
 
     log_event('weight.set',
-              db_ms=db_ms,
+              ms=db_ms,
               weight_lbs=request.weight_lbs,
               date=date or datetime.now().strftime('%Y-%m-%d'))
 
@@ -806,7 +804,7 @@ async def delete_weight(date: Optional[str] = None):
 
     if deleted:
         log_event('weight.delete',
-                  db_ms=db_ms,
+                  ms=db_ms,
                   date=date or datetime.now().strftime('%Y-%m-%d'))
         return {"message": "Weight deleted"}
     raise HTTPException(status_code=404, detail="No weight found for this date")
@@ -985,7 +983,7 @@ async def create_item(request: ItemCreate):
 
         # Log the item creation event
         log_event('item.create',
-                  db_ms=db_ms,
+                  ms=db_ms,
                   item_id=item.id,
                   name=item.name,
                   default_unit=item.default_unit,
@@ -1048,7 +1046,7 @@ async def delete_item(item_id: int):
     deleted = get_storage().delete_item(item_id)
     db_ms = int((time.time() - db_start) * 1000)
     if deleted:
-        log_event('item.delete', db_ms=db_ms, item_id=item_id)
+        log_event('item.delete', ms=db_ms, item_id=item_id)
         return {"message": "Item deleted"}
     raise HTTPException(status_code=404, detail="Item not found")
 
