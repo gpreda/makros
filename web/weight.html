@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Makros - Weight Progress</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -245,11 +246,11 @@
             }
             canvas.style.display = 'block';
 
-            const labels = data.map(d => {
-                const date = new Date(d.date);
-                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            });
-            const weights = data.map(d => d.weight_lbs);
+            // Use {x, y} format with actual dates for proper time-based spacing
+            const chartData = data.map(d => ({
+                x: new Date(d.date + 'T00:00:00'),
+                y: d.weight_lbs
+            }));
 
             if (chart) {
                 chart.destroy();
@@ -258,10 +259,9 @@
             chart = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels,
                     datasets: [{
                         label: 'Weight (lbs)',
-                        data: weights,
+                        data: chartData,
                         borderColor: '#4ecca3',
                         backgroundColor: 'rgba(78, 204, 163, 0.1)',
                         borderWidth: 2,
@@ -305,8 +305,7 @@
                             },
                             callbacks: {
                                 title: function(context) {
-                                    const idx = context[0].dataIndex;
-                                    const date = new Date(data[idx].date);
+                                    const date = new Date(context[0].parsed.x);
                                     return date.toLocaleDateString('en-US', {
                                         weekday: 'short',
                                         month: 'short',
@@ -322,6 +321,14 @@
                     },
                     scales: {
                         x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM d'
+                                },
+                                tooltipFormat: 'MMM d, yyyy'
+                            },
                             grid: {
                                 color: 'rgba(255, 255, 255, 0.05)',
                             },
