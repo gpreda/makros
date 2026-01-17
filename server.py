@@ -123,14 +123,16 @@ def get_session_id(user_id: str = DEFAULT_USER) -> str:
 
 def log_event(event: str, user_id: str = DEFAULT_USER,
               ai_used: bool = False, model_name: str = None,
-              model_tokens: int = None, model_ms: int = None, **data) -> None:
+              model_tokens: int = None, model_ms: int = None,
+              db_ms: int = None, **data) -> None:
     """Log an event to the database."""
     storage = get_storage()
     if storage:
         session_id = get_session_id(user_id)
         storage.log_event(event, user_id, session_id,
                           ai_used=ai_used, model_name=model_name,
-                          model_tokens=model_tokens, model_ms=model_ms, **data)
+                          model_tokens=model_tokens, model_ms=model_ms,
+                          db_ms=db_ms, **data)
 
 
 @app.on_event("startup")
@@ -540,11 +542,14 @@ async def log_meal_endpoint(request: LogMealRequest):
             now = datetime.now()
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
+        db_start = time.time()
         meal_id = storage.log_meal(request.description, request.items, request.totals,
                                    logged_at=meal_datetime, name=request.meal_name)
+        db_ms = int((time.time() - db_start) * 1000)
 
         # Log the meal logging event
         log_event('meal.log',
+                  db_ms=db_ms,
                   meal_id=meal_id,
                   description=request.description,
                   item_count=len(request.items),
@@ -588,12 +593,15 @@ async def log_meal_with_image(
         if image:
             image_data = await image.read()
 
+        db_start = time.time()
         meal_id = storage.log_meal(description, items_list, totals_dict,
                                    logged_at=meal_datetime, name=meal_name,
                                    image_data=image_data)
+        db_ms = int((time.time() - db_start) * 1000)
 
         # Log the meal logging event
         log_event('meal.log',
+                  db_ms=db_ms,
                   meal_id=meal_id,
                   description=description,
                   item_count=len(items_list),
@@ -645,8 +653,11 @@ async def get_meal_image(meal_id: int):
 @app.delete("/api/meals/{meal_id}")
 async def delete_meal(meal_id: int):
     """Delete a meal."""
-    if get_storage().delete_meal(meal_id):
-        log_event('meal.delete', meal_id=meal_id)
+    db_start = time.time()
+    deleted = get_storage().delete_meal(meal_id)
+    db_ms = int((time.time() - db_start) * 1000)
+    if deleted:
+        log_event('meal.delete', db_ms=db_ms, meal_id=meal_id)
         return {"message": "Meal deleted"}
     raise HTTPException(status_code=404, detail="Meal not found")
 
@@ -661,9 +672,11 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
+    db_start = time.time()
     updated = get_storage().update_meal_item(item_id, request.amount)
+    db_ms = int((time.time() - db_start) * 1000)
     if updated:
-        log_event('meal_item.update', item_id=item_id, new_amount=request.amount)
+        log_event('meal_item.update', db_ms=db_ms, item_id=item_id, new_amount=request.amount)
         return updated
     raise HTTPException(status_code=404, detail="Meal item not found")
 
@@ -697,10 +710,13 @@ async def copy_meal(meal_id: int):
         'alcohol': meal.get('total_alcohol', 0),
     }
 
+    db_start = time.time()
     new_meal_id = get_storage().log_meal(meal['description'], items, totals)
+    db_ms = int((time.time() - db_start) * 1000)
 
     # Log the copy event
     log_event('meal.copy',
+              db_ms=db_ms,
               original_meal_id=meal_id,
               new_meal_id=new_meal_id,
               description=meal['description'],
@@ -761,9 +777,13 @@ async def set_weight(request: WeightRequest, date: Optional[str] = None):
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
+
+    db_start = time.time()
     get_storage().set_weight(request.weight_lbs, dt)
+    db_ms = int((time.time() - db_start) * 1000)
 
     log_event('weight.set',
+              db_ms=db_ms,
               weight_lbs=request.weight_lbs,
               date=date or datetime.now().strftime('%Y-%m-%d'))
 
@@ -779,8 +799,14 @@ async def delete_weight(date: Optional[str] = None):
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-    if get_storage().delete_weight(dt):
+
+    db_start = time.time()
+    deleted = get_storage().delete_weight(dt)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    if deleted:
         log_event('weight.delete',
+                  db_ms=db_ms,
                   date=date or datetime.now().strftime('%Y-%m-%d'))
         return {"message": "Weight deleted"}
     raise HTTPException(status_code=404, detail="No weight found for this date")
@@ -953,10 +979,13 @@ async def create_item(request: ItemCreate):
         alcohol=request.alcohol,
     )
     try:
+        db_start = time.time()
         item = get_storage().add_item(item)
+        db_ms = int((time.time() - db_start) * 1000)
 
         # Log the item creation event
         log_event('item.create',
+                  db_ms=db_ms,
                   item_id=item.id,
                   name=item.name,
                   default_unit=item.default_unit,
@@ -1015,8 +1044,11 @@ async def update_item(item_id: int, request: ItemUpdate):
 @app.delete("/api/items/{item_id}")
 async def delete_item(item_id: int):
     """Delete an item."""
-    if get_storage().delete_item(item_id):
-        log_event('item.delete', item_id=item_id)
+    db_start = time.time()
+    deleted = get_storage().delete_item(item_id)
+    db_ms = int((time.time() - db_start) * 1000)
+    if deleted:
+        log_event('item.delete', db_ms=db_ms, item_id=item_id)
         return {"message": "Item deleted"}
     raise HTTPException(status_code=404, detail="Item not found")
 

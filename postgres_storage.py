@@ -665,16 +665,28 @@ class PostgresStorage:
     def log_event(self, event: str, user_id: str, session_id: str = None,
                   app_name: str = "makros", ai_used: bool = False,
                   model_name: str = None, model_tokens: int = None,
-                  model_ms: int = None, **data) -> None:
+                  model_ms: int = None, db_ms: int = None, **data) -> None:
         """Log an event to the shared events table."""
         try:
             with self.conn.cursor() as cur:
+                # Add db_ms column if it doesn't exist (migration)
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'events' AND column_name = 'db_ms'
+                        ) THEN
+                            ALTER TABLE events ADD COLUMN db_ms INTEGER;
+                        END IF;
+                    END $$;
+                """)
                 cur.execute("""
                     INSERT INTO events (app_name, event, user_id, session_id,
-                                        ai_used, model_name, model_tokens, model_ms, data)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                        ai_used, model_name, model_tokens, model_ms, db_ms, data)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (app_name, event, user_id, session_id,
-                      ai_used, model_name, model_tokens, model_ms,
+                      ai_used, model_name, model_tokens, model_ms, db_ms,
                       json.dumps(data) if data else None))
             self.conn.commit()
         except Exception as e:
