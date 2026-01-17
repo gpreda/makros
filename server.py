@@ -651,6 +651,23 @@ async def delete_meal(meal_id: int):
     raise HTTPException(status_code=404, detail="Meal not found")
 
 
+class UpdateMealItemRequest(BaseModel):
+    amount: float
+
+
+@app.patch("/api/meal-items/{item_id}")
+async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
+    """Update a meal item's quantity (recalculates nutrition proportionally)."""
+    if request.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    updated = get_storage().update_meal_item(item_id, request.amount)
+    if updated:
+        log_event('meal_item.update', item_id=item_id, new_amount=request.amount)
+        return updated
+    raise HTTPException(status_code=404, detail="Meal item not found")
+
+
 @app.post("/api/meals/{meal_id}/copy")
 async def copy_meal(meal_id: int):
     """Copy a meal to the current day."""

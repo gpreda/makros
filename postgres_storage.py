@@ -497,14 +497,104 @@ class PostgresStorage:
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT mi.name, mi.amount, mi.unit, mi.calories,
-                       mi.protein, mi.carbs, mi.fat, mi.fiber, mi.alcohol
+                SELECT mi.id, mi.meal_id, mi.name, mi.amount, mi.unit, mi.calories,
+                       mi.protein, mi.carbs, mi.fat, mi.fiber, mi.alcohol,
+                       mi.saturated_fat, mi.trans_fat, mi.cholesterol,
+                       mi.sodium, mi.potassium, mi.added_sugar
                 FROM meal_items mi
                 JOIN meals m ON mi.meal_id = m.id
                 WHERE DATE(m.logged_at) = DATE(%s)
                 ORDER BY m.logged_at, mi.id
             """, (date,))
             return [dict(row) for row in cur.fetchall()]
+
+    def update_meal_item(self, item_id: int, new_amount: float) -> Optional[dict]:
+        """Update a meal item's amount and recalculate nutrition proportionally.
+        Also updates the parent meal's totals. Returns updated item or None."""
+        try:
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Get current item
+                cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
+                item = cur.fetchone()
+                if not item:
+                    return None
+
+                old_amount = item['amount']
+                if old_amount == 0:
+                    return None
+
+                ratio = new_amount / old_amount
+
+                # Calculate new nutrition values
+                new_calories = int((item['calories'] or 0) * ratio)
+                new_protein = (item['protein'] or 0) * ratio
+                new_carbs = (item['carbs'] or 0) * ratio
+                new_fat = (item['fat'] or 0) * ratio
+                new_fiber = (item['fiber'] or 0) * ratio
+                new_alcohol = (item['alcohol'] or 0) * ratio
+                new_saturated_fat = (item['saturated_fat'] or 0) * ratio
+                new_trans_fat = (item['trans_fat'] or 0) * ratio
+                new_cholesterol = (item['cholesterol'] or 0) * ratio
+                new_sodium = (item['sodium'] or 0) * ratio
+                new_potassium = (item['potassium'] or 0) * ratio
+                new_added_sugar = (item['added_sugar'] or 0) * ratio
+
+                # Update the meal item
+                cur.execute("""
+                    UPDATE meal_items
+                    SET amount = %s, calories = %s, protein = %s, carbs = %s,
+                        fat = %s, fiber = %s, alcohol = %s, saturated_fat = %s,
+                        trans_fat = %s, cholesterol = %s, sodium = %s,
+                        potassium = %s, added_sugar = %s
+                    WHERE id = %s
+                """, (new_amount, new_calories, new_protein, new_carbs,
+                      new_fat, new_fiber, new_alcohol, new_saturated_fat,
+                      new_trans_fat, new_cholesterol, new_sodium,
+                      new_potassium, new_added_sugar, item_id))
+
+                # Update parent meal totals by recalculating from all items
+                meal_id = item['meal_id']
+                cur.execute("""
+                    UPDATE meals SET
+                        total_calories = (SELECT COALESCE(SUM(calories), 0) FROM meal_items WHERE meal_id = %s),
+                        total_protein = (SELECT COALESCE(SUM(protein), 0) FROM meal_items WHERE meal_id = %s),
+                        total_carbs = (SELECT COALESCE(SUM(carbs), 0) FROM meal_items WHERE meal_id = %s),
+                        total_fat = (SELECT COALESCE(SUM(fat), 0) FROM meal_items WHERE meal_id = %s),
+                        total_fiber = (SELECT COALESCE(SUM(fiber), 0) FROM meal_items WHERE meal_id = %s),
+                        total_alcohol = (SELECT COALESCE(SUM(alcohol), 0) FROM meal_items WHERE meal_id = %s),
+                        total_saturated_fat = (SELECT COALESCE(SUM(saturated_fat), 0) FROM meal_items WHERE meal_id = %s),
+                        total_trans_fat = (SELECT COALESCE(SUM(trans_fat), 0) FROM meal_items WHERE meal_id = %s),
+                        total_cholesterol = (SELECT COALESCE(SUM(cholesterol), 0) FROM meal_items WHERE meal_id = %s),
+                        total_sodium = (SELECT COALESCE(SUM(sodium), 0) FROM meal_items WHERE meal_id = %s),
+                        total_potassium = (SELECT COALESCE(SUM(potassium), 0) FROM meal_items WHERE meal_id = %s),
+                        total_added_sugar = (SELECT COALESCE(SUM(added_sugar), 0) FROM meal_items WHERE meal_id = %s)
+                    WHERE id = %s
+                """, (meal_id,) * 12 + (meal_id,))
+
+            self.conn.commit()
+
+            # Return updated item
+            return {
+                'id': item_id,
+                'name': item['name'],
+                'amount': new_amount,
+                'unit': item['unit'],
+                'calories': new_calories,
+                'protein': new_protein,
+                'carbs': new_carbs,
+                'fat': new_fat,
+                'fiber': new_fiber,
+                'alcohol': new_alcohol,
+                'saturated_fat': new_saturated_fat,
+                'trans_fat': new_trans_fat,
+                'cholesterol': new_cholesterol,
+                'sodium': new_sodium,
+                'potassium': new_potassium,
+                'added_sugar': new_added_sugar
+            }
+        except Exception as e:
+            self.conn.rollback()
+            raise
 
     def delete_meal(self, meal_id: int) -> bool:
         """Delete a meal. Returns True if deleted."""

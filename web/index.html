@@ -434,6 +434,28 @@
             outline: none;
             border-color: #3db892;
         }
+        .breakdown-amount {
+            width: 50px;
+            padding: 4px 6px;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #4ecca3;
+            font-size: 12px;
+            text-align: center;
+        }
+        .breakdown-amount:focus {
+            outline: none;
+            border-color: #3db892;
+        }
+        .amount-cell {
+            white-space: nowrap;
+        }
+        .amount-cell .unit {
+            margin-left: 4px;
+            font-size: 11px;
+            color: #888;
+        }
         .row-delete-btn {
             background: transparent;
             color: #666;
@@ -473,6 +495,14 @@
             font-size: 10px;
             color: #666;
             margin-top: 2px;
+        }
+        .table-scroll {
+            overflow-x: auto;
+            margin: 0 -10px;
+            padding: 0 10px;
+        }
+        .table-scroll table {
+            min-width: 700px;
         }
         @media (max-width: 600px) {
             th, td {
@@ -582,6 +612,7 @@
             <button id="analyze-btn" onclick="analyzeMeal()">Analyze</button>
 
             <div id="analysis-result" class="hidden">
+                <div class="table-scroll">
                 <table>
                     <thead>
                         <tr>
@@ -591,12 +622,16 @@
                             <th>P</th>
                             <th>C</th>
                             <th>F</th>
-                            <th>Alc</th>
+                            <th>SatF</th>
+                            <th>Na</th>
+                            <th>Chol</th>
+                            <th>Sugar</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody id="analysis-table"></tbody>
                 </table>
+                </div>
                 <div class="btn-row">
                     <button onclick="logMeal()">Log Meal</button>
                     <button class="secondary" onclick="clearAnalysis()">Clear</button>
@@ -835,53 +870,114 @@
                     acc.fat += item.fat || 0;
                     acc.fiber += item.fiber || 0;
                     acc.alcohol += item.alcohol || 0;
+                    acc.saturated_fat += item.saturated_fat || 0;
+                    acc.trans_fat += item.trans_fat || 0;
+                    acc.cholesterol += item.cholesterol || 0;
+                    acc.sodium += item.sodium || 0;
+                    acc.potassium += item.potassium || 0;
+                    acc.added_sugar += item.added_sugar || 0;
                     return acc;
-                }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0});
+                }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0,
+                    saturated_fat: 0, trans_fat: 0, cholesterol: 0, sodium: 0, potassium: 0, added_sugar: 0});
 
                 const rows = data.items.map(item => `
-                    <tr>
+                    <tr data-item-id="${item.id}">
                         <td>${escapeHtml(item.name)}</td>
-                        <td>${item.amount} ${item.unit}</td>
-                        <td>${item.calories || 0}</td>
-                        <td>${(item.protein || 0).toFixed(1)}</td>
-                        <td>${(item.carbs || 0).toFixed(1)}</td>
-                        <td>${(item.fat || 0).toFixed(1)}</td>
-                        <td>${(item.fiber || 0).toFixed(1)}</td>
-                        <td>${(item.alcohol || 0).toFixed(1)}</td>
+                        <td class="amount-cell">
+                            <input type="number" class="breakdown-amount" value="${item.amount}"
+                                   data-item-id="${item.id}" data-original="${item.amount}"
+                                   min="0.1" step="0.1" onchange="updateBreakdownItem(this)">
+                            <span class="unit">${item.unit}</span>
+                        </td>
+                        <td class="cal-cell">${item.calories || 0}</td>
+                        <td class="p-cell">${(item.protein || 0).toFixed(1)}</td>
+                        <td class="c-cell">${(item.carbs || 0).toFixed(1)}</td>
+                        <td class="f-cell">${(item.fat || 0).toFixed(1)}</td>
+                        <td class="fiber-cell">${(item.fiber || 0).toFixed(1)}</td>
+                        <td class="alc-cell">${(item.alcohol || 0).toFixed(1)}</td>
+                        <td class="satf-cell">${(item.saturated_fat || 0).toFixed(1)}</td>
+                        <td class="transf-cell">${(item.trans_fat || 0).toFixed(1)}</td>
+                        <td class="chol-cell">${Math.round(item.cholesterol || 0)}</td>
+                        <td class="na-cell">${Math.round(item.sodium || 0)}</td>
+                        <td class="k-cell">${Math.round(item.potassium || 0)}</td>
+                        <td class="addsug-cell">${(item.added_sugar || 0).toFixed(1)}</td>
                     </tr>
                 `).join('');
 
                 const totalsRow = `
                     <tr class="totals">
                         <td colspan="2">Total</td>
-                        <td>${Math.round(totals.calories)}</td>
-                        <td>${totals.protein.toFixed(1)}</td>
-                        <td>${totals.carbs.toFixed(1)}</td>
-                        <td>${totals.fat.toFixed(1)}</td>
-                        <td>${totals.fiber.toFixed(1)}</td>
-                        <td>${totals.alcohol.toFixed(1)}</td>
+                        <td class="total-cal">${Math.round(totals.calories)}</td>
+                        <td class="total-p">${totals.protein.toFixed(1)}</td>
+                        <td class="total-c">${totals.carbs.toFixed(1)}</td>
+                        <td class="total-f">${totals.fat.toFixed(1)}</td>
+                        <td class="total-fiber">${totals.fiber.toFixed(1)}</td>
+                        <td class="total-alc">${totals.alcohol.toFixed(1)}</td>
+                        <td class="total-satf">${totals.saturated_fat.toFixed(1)}</td>
+                        <td class="total-transf">${totals.trans_fat.toFixed(1)}</td>
+                        <td class="total-chol">${Math.round(totals.cholesterol)}</td>
+                        <td class="total-na">${Math.round(totals.sodium)}</td>
+                        <td class="total-k">${Math.round(totals.potassium)}</td>
+                        <td class="total-addsug">${totals.added_sugar.toFixed(1)}</td>
                     </tr>
                 `;
 
                 content.innerHTML = `
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Item</th>
-                                <th>Amount</th>
-                                <th>Kcal</th>
-                                <th>P</th>
-                                <th>C</th>
-                                <th>F</th>
-                                <th>Fiber</th>
-                                <th>Alc</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows}${totalsRow}</tbody>
-                    </table>
+                    <div class="table-scroll">
+                        <table id="breakdown-table">
+                            <thead>
+                                <tr>
+                                    <th>Item</th>
+                                    <th>Amount</th>
+                                    <th>Kcal</th>
+                                    <th>P</th>
+                                    <th>C</th>
+                                    <th>F</th>
+                                    <th>Fiber</th>
+                                    <th>Alc</th>
+                                    <th>SatF</th>
+                                    <th>TransF</th>
+                                    <th>Chol</th>
+                                    <th>Na</th>
+                                    <th>K</th>
+                                    <th>AddSug</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}${totalsRow}</tbody>
+                        </table>
+                    </div>
                 `;
             } catch (e) {
                 content.innerHTML = '<div class="error">Failed to load breakdown</div>';
+            }
+        }
+
+        async function updateBreakdownItem(input) {
+            const itemId = input.dataset.itemId;
+            const originalAmount = parseFloat(input.dataset.original);
+            const newAmount = parseFloat(input.value);
+
+            if (isNaN(newAmount) || newAmount <= 0) {
+                input.value = originalAmount;
+                return;
+            }
+
+            if (newAmount === originalAmount) return;
+
+            try {
+                const res = await fetch(`/api/meal-items/${itemId}`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({amount: newAmount})
+                });
+
+                if (!res.ok) throw new Error('Update failed');
+
+                // Reload all data to refresh totals
+                loadData();
+            } catch (e) {
+                input.value = originalAmount;
+                alert('Failed to update item');
             }
         }
 
@@ -986,7 +1082,10 @@
                     <td class="p-cell">${item.protein.toFixed(1)}</td>
                     <td class="c-cell">${item.carbs.toFixed(1)}</td>
                     <td class="f-cell">${item.fat.toFixed(1)}</td>
-                    <td class="a-cell">${(item.alcohol || 0).toFixed(1)}</td>
+                    <td class="sf-cell">${(item.saturated_fat || 0).toFixed(1)}</td>
+                    <td class="na-cell">${Math.round(item.sodium || 0)}</td>
+                    <td class="ch-cell">${Math.round(item.cholesterol || 0)}</td>
+                    <td class="su-cell">${(item.added_sugar || 0).toFixed(1)}</td>
                     <td><button class="row-delete-btn" onclick="removeItem(${idx})" title="Remove">&times;</button></td>
                 </tr>
             `).join('');
@@ -999,7 +1098,10 @@
                     <td id="total-p">${totals.protein.toFixed(1)}</td>
                     <td id="total-c">${totals.carbs.toFixed(1)}</td>
                     <td id="total-f">${totals.fat.toFixed(1)}</td>
-                    <td id="total-a">${(totals.alcohol || 0).toFixed(1)}</td>
+                    <td id="total-sf">${(totals.saturated_fat || 0).toFixed(1)}</td>
+                    <td id="total-na">${Math.round(totals.sodium || 0)}</td>
+                    <td id="total-ch">${Math.round(totals.cholesterol || 0)}</td>
+                    <td id="total-su">${(totals.added_sugar || 0).toFixed(1)}</td>
                     <td></td>
                 </tr>
             `;
@@ -1033,7 +1135,10 @@
                 row.querySelector('.p-cell').textContent = item.protein.toFixed(1);
                 row.querySelector('.c-cell').textContent = item.carbs.toFixed(1);
                 row.querySelector('.f-cell').textContent = item.fat.toFixed(1);
-                row.querySelector('.a-cell').textContent = item.alcohol.toFixed(1);
+                row.querySelector('.sf-cell').textContent = item.saturated_fat.toFixed(1);
+                row.querySelector('.na-cell').textContent = Math.round(item.sodium);
+                row.querySelector('.ch-cell').textContent = Math.round(item.cholesterol);
+                row.querySelector('.su-cell').textContent = item.added_sugar.toFixed(1);
             }
 
             recalculateTotals();
@@ -1072,7 +1177,10 @@
                 document.getElementById('total-p').textContent = totals.protein.toFixed(1);
                 document.getElementById('total-c').textContent = totals.carbs.toFixed(1);
                 document.getElementById('total-f').textContent = totals.fat.toFixed(1);
-                document.getElementById('total-a').textContent = totals.alcohol.toFixed(1);
+                document.getElementById('total-sf').textContent = totals.saturated_fat.toFixed(1);
+                document.getElementById('total-na').textContent = Math.round(totals.sodium);
+                document.getElementById('total-ch').textContent = Math.round(totals.cholesterol);
+                document.getElementById('total-su').textContent = totals.added_sugar.toFixed(1);
             }
         }
 
