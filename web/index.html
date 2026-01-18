@@ -273,6 +273,9 @@
             text-overflow: ellipsis;
             margin-right: 15px;
         }
+        .meal-item .desc.long-name {
+            font-size: 14px;
+        }
         .meal-item .macros {
             font-size: 14px;
             color: #888;
@@ -512,6 +515,12 @@
             .day-nav h2 {
                 font-size: 1em;
             }
+            .meal-item .desc {
+                white-space: normal;
+                max-width: 180px;
+                font-size: 14px;
+                line-height: 1.3;
+            }
         }
     </style>
 </head>
@@ -712,9 +721,13 @@
             const nextBtn = document.getElementById('next-btn');
             nextBtn.disabled = false;
 
-            // Show/hide analyze card (only show for today)
+            // Show/hide analyze card (show for today and past days, not future)
             const analyzeCard = document.getElementById('analyze-card');
-            if (isToday(currentDate)) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const checkDate = new Date(currentDate);
+            checkDate.setHours(0, 0, 0, 0);
+            if (checkDate <= today) {
                 analyzeCard.classList.remove('hidden');
             } else {
                 analyzeCard.classList.add('hidden');
@@ -827,10 +840,11 @@
                     // Use short name if available, otherwise truncate description
                     const displayName = meal.name || truncateText(meal.description, 30);
                     const fullDesc = meal.description;
+                    const longNameClass = displayName.length > 25 ? ' long-name' : '';
                     return `
                         <div class="meal-item">
                             <div>
-                                <div class="desc" title="${escapeHtml(fullDesc)}">${escapeHtml(displayName)}</div>
+                                <div class="desc${longNameClass}" title="${escapeHtml(fullDesc)}">${escapeHtml(displayName)}</div>
                                 <div class="time">${time}</div>
                             </div>
                             <div class="right">
@@ -1198,7 +1212,7 @@
                     formData.append('description', currentDescription);
                     formData.append('items', JSON.stringify(currentAnalysis.items));
                     formData.append('totals', JSON.stringify(currentAnalysis.totals));
-                    formData.append('date', getDateString(new Date()));
+                    formData.append('date', getDateString(currentDate));
                     if (currentAnalysis.meal_name) {
                         formData.append('meal_name', currentAnalysis.meal_name);
                     }
@@ -1217,7 +1231,7 @@
                             description: currentDescription,
                             items: currentAnalysis.items,
                             totals: currentAnalysis.totals,
-                            date: getDateString(new Date()),
+                            date: getDateString(currentDate),
                             meal_name: currentAnalysis.meal_name
                         })
                     });

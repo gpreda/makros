@@ -109,6 +109,57 @@ def get_genai_client() -> genai.Client:
     return _genai_client
 
 
+def generate_smart_meal_name(items: list[dict], calorie_threshold: int = 20) -> str:
+    """Generate a smart meal name from items, listing main ingredients.
+
+    Args:
+        items: List of meal items with 'name' and 'calories' keys
+        calorie_threshold: Minimum calories for an item to be included
+
+    Returns:
+        A string like "Eggs, Bacon, Toast..." or "Eggs, Bacon" if all items included
+    """
+    if not items:
+        return ""
+
+    # Sort by calories descending to prioritize main ingredients
+    sorted_items = sorted(items, key=lambda x: x.get('calories', 0) or 0, reverse=True)
+
+    # Filter out low-calorie items
+    main_items = [item for item in sorted_items if (item.get('calories', 0) or 0) >= calorie_threshold]
+    skipped_count = len(sorted_items) - len(main_items)
+
+    # If all items were filtered out, just use the top items by calories
+    if not main_items:
+        main_items = sorted_items[:3]
+        skipped_count = max(0, len(sorted_items) - 3)
+
+    # Build the name from item names, limit to reasonable length
+    names = []
+    total_len = 0
+    max_len = 50  # Max length before truncating
+
+    for item in main_items:
+        name = item.get('name', '').strip()
+        if not name:
+            continue
+        # If adding this name would exceed max length, stop
+        if total_len + len(name) + 2 > max_len and names:  # +2 for ", "
+            skipped_count += len(main_items) - len(names)
+            break
+        names.append(name)
+        total_len += len(name) + 2
+
+    if not names:
+        return ""
+
+    result = ", ".join(names)
+    if skipped_count > 0:
+        result += "..."
+
+    return result
+
+
 # Session management for logging
 _user_sessions: dict[str, str] = {}
 DEFAULT_USER = "default"
@@ -540,9 +591,12 @@ async def log_meal_endpoint(request: LogMealRequest):
             now = datetime.now()
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
+        # Generate smart meal name from items
+        meal_name = generate_smart_meal_name(request.items)
+
         db_start = time.time()
         meal_id = storage.log_meal(request.description, request.items, request.totals,
-                                   logged_at=meal_datetime, name=request.meal_name)
+                                   logged_at=meal_datetime, name=meal_name)
         db_ms = int((time.time() - db_start) * 1000)
 
         # Log the meal logging event
@@ -591,9 +645,12 @@ async def log_meal_with_image(
         if image:
             image_data = await image.read()
 
+        # Generate smart meal name from items
+        smart_name = generate_smart_meal_name(items_list)
+
         db_start = time.time()
         meal_id = storage.log_meal(description, items_list, totals_dict,
-                                   logged_at=meal_datetime, name=meal_name,
+                                   logged_at=meal_datetime, name=smart_name,
                                    image_data=image_data)
         db_ms = int((time.time() - db_start) * 1000)
 
