@@ -736,6 +736,61 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
     raise HTTPException(status_code=404, detail="Meal item not found")
 
 
+@app.post("/api/meal-items/{item_id}/copy")
+async def copy_meal_item(item_id: int):
+    """Copy a single meal item to today as a new meal."""
+    item = get_storage().get_meal_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Meal item not found")
+
+    # Create a single-item meal for today
+    items = [{
+        'name': item['name'],
+        'amount': item['amount'],
+        'unit': item['unit'],
+        'calories': item['calories'],
+        'protein': item['protein'],
+        'carbs': item['carbs'],
+        'fat': item['fat'],
+        'fiber': item.get('fiber', 0),
+        'alcohol': item.get('alcohol', 0),
+        'saturated_fat': item.get('saturated_fat', 0),
+        'trans_fat': item.get('trans_fat', 0),
+        'cholesterol': item.get('cholesterol', 0),
+        'sodium': item.get('sodium', 0),
+        'potassium': item.get('potassium', 0),
+        'added_sugar': item.get('added_sugar', 0),
+    }]
+
+    totals = {
+        'calories': item['calories'],
+        'protein': item['protein'],
+        'carbs': item['carbs'],
+        'fat': item['fat'],
+        'fiber': item.get('fiber', 0),
+        'alcohol': item.get('alcohol', 0),
+        'saturated_fat': item.get('saturated_fat', 0),
+        'trans_fat': item.get('trans_fat', 0),
+        'cholesterol': item.get('cholesterol', 0),
+        'sodium': item.get('sodium', 0),
+        'potassium': item.get('potassium', 0),
+        'added_sugar': item.get('added_sugar', 0),
+    }
+
+    db_start = time.time()
+    new_meal_id = get_storage().log_meal(item['name'], items, totals)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    log_event('meal_item.copy',
+              ms=db_ms,
+              original_item_id=item_id,
+              new_meal_id=new_meal_id,
+              item_name=item['name'],
+              calories=item['calories'])
+
+    return {"id": new_meal_id, "message": "Item copied as new meal"}
+
+
 @app.post("/api/meals/{meal_id}/copy")
 async def copy_meal(meal_id: int):
     """Copy a meal to the current day."""

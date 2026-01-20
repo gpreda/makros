@@ -508,6 +508,13 @@ class PostgresStorage:
             """, (date,))
             return [dict(row) for row in cur.fetchall()]
 
+    def get_meal_item(self, item_id: int) -> Optional[dict]:
+        """Get a single meal item by ID."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def update_meal_item(self, item_id: int, new_amount: float) -> Optional[dict]:
         """Update a meal item's amount and recalculate nutrition proportionally.
         Also updates the parent meal's totals. Returns updated item or None."""

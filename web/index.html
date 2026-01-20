@@ -895,6 +895,7 @@
                 }, {calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, alcohol: 0,
                     saturated_fat: 0, trans_fat: 0, cholesterol: 0, sodium: 0, potassium: 0, added_sugar: 0});
 
+                const showCopyBtn = !isToday(currentDate);
                 const rows = data.items.map(item => `
                     <tr data-item-id="${item.id}">
                         <td>${escapeHtml(item.name)}</td>
@@ -916,6 +917,7 @@
                         <td class="na-cell">${Math.round(item.sodium || 0)}</td>
                         <td class="k-cell">${Math.round(item.potassium || 0)}</td>
                         <td class="addsug-cell">${(item.added_sugar || 0).toFixed(1)}</td>
+                        ${showCopyBtn ? `<td><button class="copy-btn" onclick="copyItem(${item.id})" title="Copy to today">&#x2398;</button></td>` : ''}
                     </tr>
                 `).join('');
 
@@ -934,6 +936,7 @@
                         <td class="total-na">${Math.round(totals.sodium)}</td>
                         <td class="total-k">${Math.round(totals.potassium)}</td>
                         <td class="total-addsug">${totals.added_sugar.toFixed(1)}</td>
+                        ${showCopyBtn ? '<td></td>' : ''}
                     </tr>
                 `;
 
@@ -956,6 +959,7 @@
                                     <th>Na</th>
                                     <th>K</th>
                                     <th>AddSug</th>
+                                    ${showCopyBtn ? '<th></th>' : ''}
                                 </tr>
                             </thead>
                             <tbody>${totalsRow}${rows}${totalsRow}</tbody>
@@ -1380,6 +1384,17 @@
                 goToToday();
             } catch (e) {
                 alert('Failed to copy meal');
+            }
+        }
+
+        async function copyItem(itemId) {
+            try {
+                const res = await fetch(`/api/meal-items/${itemId}/copy`, {method: 'POST'});
+                if (!res.ok) throw new Error('Failed to copy');
+                // Go to today and reload
+                goToToday();
+            } catch (e) {
+                alert('Failed to copy item');
             }
         }
 
