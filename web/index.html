@@ -619,6 +619,7 @@
                 <button class="remove-btn" onclick="removeImage()">&times;</button>
             </div>
             <button id="analyze-btn" onclick="analyzeMeal()">Analyze</button>
+            <button id="analyze-log-btn" onclick="analyzeAndLogMeal()">Analyze & Log</button>
 
             <div id="analysis-result" class="hidden">
                 <div class="table-scroll">
@@ -1061,6 +1062,104 @@
             }
         }
 
+        async function analyzeAndLogMeal() {
+            const input = document.getElementById('meal-input');
+            const description = input.value.trim();
+
+            if (!description && !currentImageFile) return;
+
+            const analyzeBtn = document.getElementById('analyze-btn');
+            const analyzeLogBtn = document.getElementById('analyze-log-btn');
+            const loading = document.getElementById('analysis-loading');
+            const error = document.getElementById('analysis-error');
+            const result = document.getElementById('analysis-result');
+
+            analyzeBtn.disabled = true;
+            analyzeLogBtn.disabled = true;
+            loading.textContent = 'Analyzing...';
+            loading.classList.remove('hidden');
+            error.classList.add('hidden');
+            result.classList.add('hidden');
+
+            try {
+                // Step 1: Analyze
+                let res;
+                if (currentImageFile) {
+                    const formData = new FormData();
+                    formData.append('file', currentImageFile);
+                    if (description) {
+                        formData.append('hint', description);
+                    }
+                    res = await fetch('/api/analyze/image', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    res = await fetch('/api/analyze', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({description})
+                    });
+                }
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || 'Analysis failed');
+                }
+
+                const data = await res.json();
+                currentAnalysis = data;
+                currentDescription = description || data.meal_name || 'Meal from photo';
+
+                // Step 2: Log
+                loading.textContent = 'Logging...';
+                let logRes;
+                if (currentImageFile) {
+                    const formData = new FormData();
+                    formData.append('description', currentDescription);
+                    formData.append('items', JSON.stringify(currentAnalysis.items));
+                    formData.append('totals', JSON.stringify(currentAnalysis.totals));
+                    formData.append('date', getDateString(currentDate));
+                    if (currentAnalysis.meal_name) {
+                        formData.append('meal_name', currentAnalysis.meal_name);
+                    }
+                    formData.append('image', currentImageFile);
+
+                    logRes = await fetch('/api/meals/with-image', {
+                        method: 'POST',
+                        body: formData
+                    });
+                } else {
+                    logRes = await fetch('/api/meals', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            description: currentDescription,
+                            items: currentAnalysis.items,
+                            totals: currentAnalysis.totals,
+                            date: getDateString(currentDate),
+                            meal_name: currentAnalysis.meal_name
+                        })
+                    });
+                }
+
+                if (!logRes.ok) {
+                    const errData = await logRes.json().catch(() => ({}));
+                    throw new Error(errData.detail || 'Failed to log meal');
+                }
+
+                clearAnalysis();
+                loadData();
+            } catch (e) {
+                error.textContent = e.message || 'Failed to analyze and log meal.';
+                error.classList.remove('hidden');
+            } finally {
+                analyzeBtn.disabled = false;
+                analyzeLogBtn.disabled = false;
+                loading.classList.add('hidden');
+            }
+        }
+
         function renderAnalysis(data) {
             // Store per-unit macros for recalculation (including extended nutrients)
             data.items.forEach(item => {
@@ -1298,6 +1397,8 @@
             reader.onload = (e) => {
                 previewImg.src = e.target.result;
                 preview.classList.remove('hidden');
+                // Auto-analyze when image is selected
+                analyzeMeal();
             };
             reader.readAsDataURL(file);
         }
