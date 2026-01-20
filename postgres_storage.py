@@ -662,13 +662,15 @@ class PostgresStorage:
             return [{'date': str(row['date']), 'weight_lbs': row['weight_lbs']} for row in cur.fetchall()]
 
     def get_calories_history(self, days: Optional[int] = None) -> list[dict]:
-        """Get daily calories history. If days is None, returns all history."""
+        """Get daily calories history. If days is None, returns all history.
+        Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             if days:
                 cur.execute("""
                     SELECT DATE(logged_at) as date, SUM(total_calories) as calories
                     FROM meals
                     WHERE DATE(logged_at) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                      AND DATE(logged_at) < CURRENT_DATE
                     GROUP BY DATE(logged_at)
                     ORDER BY date ASC
                 """, (days,))
@@ -676,6 +678,7 @@ class PostgresStorage:
                 cur.execute("""
                     SELECT DATE(logged_at) as date, SUM(total_calories) as calories
                     FROM meals
+                    WHERE DATE(logged_at) < CURRENT_DATE
                     GROUP BY DATE(logged_at)
                     ORDER BY date ASC
                 """)
