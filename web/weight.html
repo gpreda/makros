@@ -270,6 +270,13 @@
                 y: d.calories
             }));
 
+            // Calculate calories axis bounds
+            const caloriesValues = caloriesData.map(d => d.calories);
+            const minCalories = caloriesValues.length > 0 ? Math.min(...caloriesValues) : 1500;
+            const maxCalories = caloriesValues.length > 0 ? Math.max(...caloriesValues) : 3000;
+            const caloriesMin = Math.min(minCalories, 1500);
+            const caloriesMax = Math.max(maxCalories, 3000);
+
             if (chart) {
                 chart.destroy();
             }
@@ -405,6 +412,8 @@
                             type: 'linear',
                             display: true,
                             position: 'right',
+                            min: caloriesMin,
+                            max: caloriesMax,
                             grid: {
                                 drawOnChartArea: false,
                             },
