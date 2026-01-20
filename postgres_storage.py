@@ -691,6 +691,69 @@ class PostgresStorage:
                 """)
             return [{'date': str(row['date']), 'calories': int(row['calories'])} for row in cur.fetchall()]
 
+    def get_macros_history(self, days: Optional[int] = None) -> list[dict]:
+        """Get daily macros history for all nutrients. If days is None, returns all history.
+        Excludes today since the day is not complete."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                SELECT DATE(logged_at) as date,
+                    SUM(total_calories) as calories,
+                    SUM(total_protein) as protein,
+                    SUM(total_carbs) as carbs,
+                    SUM(total_fat) as fat,
+                    SUM(total_fiber) as fiber,
+                    SUM(total_alcohol) as alcohol,
+                    SUM(total_saturated_fat) as saturated_fat,
+                    SUM(total_trans_fat) as trans_fat,
+                    SUM(total_cholesterol) as cholesterol,
+                    SUM(total_sodium) as sodium,
+                    SUM(total_potassium) as potassium,
+                    SUM(total_added_sugar) as added_sugar
+                FROM meals
+                WHERE DATE(logged_at) < CURRENT_DATE
+            """
+            if days:
+                query = """
+                    SELECT DATE(logged_at) as date,
+                        SUM(total_calories) as calories,
+                        SUM(total_protein) as protein,
+                        SUM(total_carbs) as carbs,
+                        SUM(total_fat) as fat,
+                        SUM(total_fiber) as fiber,
+                        SUM(total_alcohol) as alcohol,
+                        SUM(total_saturated_fat) as saturated_fat,
+                        SUM(total_trans_fat) as trans_fat,
+                        SUM(total_cholesterol) as cholesterol,
+                        SUM(total_sodium) as sodium,
+                        SUM(total_potassium) as potassium,
+                        SUM(total_added_sugar) as added_sugar
+                    FROM meals
+                    WHERE DATE(logged_at) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                      AND DATE(logged_at) < CURRENT_DATE
+                    GROUP BY DATE(logged_at)
+                    ORDER BY date ASC
+                """
+                cur.execute(query, (days,))
+            else:
+                query += " GROUP BY DATE(logged_at) ORDER BY date ASC"
+                cur.execute(query)
+
+            return [{
+                'date': str(row['date']),
+                'calories': int(row['calories'] or 0),
+                'protein': float(row['protein'] or 0),
+                'carbs': float(row['carbs'] or 0),
+                'fat': float(row['fat'] or 0),
+                'fiber': float(row['fiber'] or 0),
+                'alcohol': float(row['alcohol'] or 0),
+                'saturated_fat': float(row['saturated_fat'] or 0),
+                'trans_fat': float(row['trans_fat'] or 0),
+                'cholesterol': float(row['cholesterol'] or 0),
+                'sodium': float(row['sodium'] or 0),
+                'potassium': float(row['potassium'] or 0),
+                'added_sugar': float(row['added_sugar'] or 0),
+            } for row in cur.fetchall()]
+
     # Event logging (shared with tongue app)
     def log_event(self, event: str, user_id: str, session_id: str = None,
                   app_name: str = "makros", ms: int = None, ai_used: bool = False,

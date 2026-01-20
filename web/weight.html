@@ -186,10 +186,19 @@
                 </div>
             </div>
         </div>
+
+        <!-- Detailed Macros Chart -->
+        <div class="card">
+            <h2 style="color: #4ecca3; margin-bottom: 20px;">Daily Macros</h2>
+            <div class="chart-container">
+                <canvas id="macros-chart"></canvas>
+            </div>
+        </div>
     </div>
 
     <script>
         let chart = null;
+        let macrosChart = null;
         let currentDays = 30;
 
         async function loadWeightData(days) {
@@ -214,6 +223,19 @@
                 return data.history || [];
             } catch (e) {
                 console.error('Failed to load calories data:', e);
+                return [];
+            }
+        }
+
+        async function loadMacrosData(days) {
+            const url = days === 'all' ? '/api/daily/macros-history' : `/api/daily/macros-history?days=${days}`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                return data.history || [];
+            } catch (e) {
+                console.error('Failed to load macros data:', e);
                 return [];
             }
         }
@@ -434,13 +456,183 @@
             });
         }
 
+        function renderMacrosChart(macrosData) {
+            const ctx = document.getElementById('macros-chart').getContext('2d');
+            const canvas = document.getElementById('macros-chart');
+
+            if (macrosData.length === 0) {
+                canvas.style.display = 'none';
+                return;
+            }
+            canvas.style.display = 'block';
+
+            // Define colors for each nutrient
+            const colors = {
+                protein: '#4ecca3',      // green
+                carbs: '#ffd93d',        // yellow
+                fat: '#ff6b6b',          // red
+                fiber: '#6bcb77',        // light green
+                alcohol: '#9b59b6',      // purple
+                saturated_fat: '#e74c3c', // dark red
+                sodium: '#3498db',       // blue
+                cholesterol: '#f39c12',  // orange
+                added_sugar: '#e91e63',  // pink
+            };
+
+            // Create datasets for main macros (protein, carbs, fat)
+            const datasets = [
+                {
+                    label: 'Protein (g)',
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.protein })),
+                    borderColor: colors.protein,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 6,
+                },
+                {
+                    label: 'Carbs (g)',
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.carbs })),
+                    borderColor: colors.carbs,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 6,
+                },
+                {
+                    label: 'Fat (g)',
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.fat })),
+                    borderColor: colors.fat,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 6,
+                },
+                {
+                    label: 'Fiber (g)',
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.fiber })),
+                    borderColor: colors.fiber,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                },
+                {
+                    label: 'Sat Fat (g)',
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.saturated_fat })),
+                    borderColor: colors.saturated_fat,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                },
+                {
+                    label: 'Added Sugar (g)',
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.added_sugar })),
+                    borderColor: colors.added_sugar,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                },
+            ];
+
+            if (macrosChart) {
+                macrosChart.destroy();
+            }
+
+            macrosChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index',
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            labels: {
+                                color: '#888',
+                                usePointStyle: true,
+                                padding: 15,
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: '#16213e',
+                            titleColor: '#eee',
+                            bodyColor: '#eee',
+                            borderColor: '#4ecca3',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: true,
+                            callbacks: {
+                                title: function(context) {
+                                    const date = new Date(context[0].parsed.x);
+                                    return date.toLocaleDateString('en-US', {
+                                        weekday: 'short',
+                                        month: 'short',
+                                        day: 'numeric'
+                                    });
+                                },
+                                label: function(context) {
+                                    return ' ' + context.dataset.label + ': ' + context.parsed.y.toFixed(1);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM d'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)',
+                            },
+                            ticks: {
+                                color: '#888',
+                                maxTicksLimit: 10,
+                            }
+                        },
+                        y: {
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.05)',
+                            },
+                            ticks: {
+                                color: '#888',
+                            },
+                            title: {
+                                display: true,
+                                text: 'Grams',
+                                color: '#888',
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         async function updateChart(days) {
             currentDays = days;
-            const [weightData, caloriesData] = await Promise.all([
+            const [weightData, caloriesData, macrosData] = await Promise.all([
                 loadWeightData(days),
-                loadCaloriesData(days)
+                loadCaloriesData(days),
+                loadMacrosData(days)
             ]);
             renderChart(weightData, caloriesData);
+            renderMacrosChart(macrosData);
             updateStats(weightData);
         }
 
