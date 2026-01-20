@@ -661,6 +661,26 @@ class PostgresStorage:
                 """)
             return [{'date': str(row['date']), 'weight_lbs': row['weight_lbs']} for row in cur.fetchall()]
 
+    def get_calories_history(self, days: Optional[int] = None) -> list[dict]:
+        """Get daily calories history. If days is None, returns all history."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if days:
+                cur.execute("""
+                    SELECT DATE(logged_at) as date, SUM(total_calories) as calories
+                    FROM meals
+                    WHERE DATE(logged_at) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    GROUP BY DATE(logged_at)
+                    ORDER BY date ASC
+                """, (days,))
+            else:
+                cur.execute("""
+                    SELECT DATE(logged_at) as date, SUM(total_calories) as calories
+                    FROM meals
+                    GROUP BY DATE(logged_at)
+                    ORDER BY date ASC
+                """)
+            return [{'date': str(row['date']), 'calories': int(row['calories'])} for row in cur.fetchall()]
+
     # Event logging (shared with tongue app)
     def log_event(self, event: str, user_id: str, session_id: str = None,
                   app_name: str = "makros", ms: int = None, ai_used: bool = False,

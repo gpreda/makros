@@ -205,6 +205,19 @@
             }
         }
 
+        async function loadCaloriesData(days) {
+            const url = days === 'all' ? '/api/daily/history' : `/api/daily/history?days=${days}`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                return data.history || [];
+            } catch (e) {
+                console.error('Failed to load calories data:', e);
+                return [];
+            }
+        }
+
         function updateStats(data) {
             const statsRow = document.getElementById('stats-row');
             const emptyState = document.getElementById('empty-state');
@@ -236,20 +249,25 @@
             document.getElementById('stat-max').textContent = max.toFixed(1);
         }
 
-        function renderChart(data) {
+        function renderChart(weightData, caloriesData) {
             const ctx = document.getElementById('weight-chart').getContext('2d');
             const canvas = document.getElementById('weight-chart');
 
-            if (data.length === 0) {
+            if (weightData.length === 0 && caloriesData.length === 0) {
                 canvas.style.display = 'none';
                 return;
             }
             canvas.style.display = 'block';
 
             // Use {x, y} format with actual dates for proper time-based spacing
-            const chartData = data.map(d => ({
+            const weightChartData = weightData.map(d => ({
                 x: new Date(d.date + 'T00:00:00'),
                 y: d.weight_lbs
+            }));
+
+            const caloriesChartData = caloriesData.map(d => ({
+                x: new Date(d.date + 'T00:00:00'),
+                y: d.calories
             }));
 
             if (chart) {
@@ -261,7 +279,7 @@
                 data: {
                     datasets: [{
                         label: 'Weight (lbs)',
-                        data: chartData,
+                        data: weightChartData,
                         borderColor: '#4ecca3',
                         backgroundColor: 'rgba(78, 204, 163, 0.1)',
                         borderWidth: 2,
@@ -275,6 +293,24 @@
                         pointHoverBorderColor: '#4ecca3',
                         pointBorderWidth: 2,
                         pointHoverBorderWidth: 3,
+                        yAxisID: 'y',
+                    }, {
+                        label: 'Calories',
+                        data: caloriesChartData,
+                        borderColor: '#ff6b6b',
+                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#ff6b6b',
+                        pointHoverBackgroundColor: '#fff',
+                        pointBorderColor: '#ff6b6b',
+                        pointHoverBorderColor: '#ff6b6b',
+                        pointBorderWidth: 2,
+                        pointHoverBorderWidth: 3,
+                        yAxisID: 'y1',
                     }]
                 },
                 options: {
@@ -286,21 +322,26 @@
                     },
                     plugins: {
                         legend: {
-                            display: false,
+                            display: true,
+                            labels: {
+                                color: '#888',
+                                usePointStyle: true,
+                                padding: 20,
+                            }
                         },
                         tooltip: {
                             backgroundColor: '#16213e',
                             titleColor: '#eee',
-                            bodyColor: '#4ecca3',
+                            bodyColor: '#eee',
                             borderColor: '#4ecca3',
                             borderWidth: 1,
                             padding: 12,
-                            displayColors: false,
+                            displayColors: true,
                             titleFont: {
                                 size: 14,
                             },
                             bodyFont: {
-                                size: 18,
+                                size: 14,
                                 weight: 'bold',
                             },
                             callbacks: {
@@ -314,7 +355,11 @@
                                     });
                                 },
                                 label: function(context) {
-                                    return context.parsed.y.toFixed(1) + ' lbs';
+                                    if (context.dataset.label === 'Weight (lbs)') {
+                                        return ' ' + context.parsed.y.toFixed(1) + ' lbs';
+                                    } else {
+                                        return ' ' + context.parsed.y + ' kcal';
+                                    }
                                 }
                             }
                         }
@@ -338,14 +383,41 @@
                             }
                         },
                         y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
                             grid: {
                                 color: 'rgba(255, 255, 255, 0.05)',
                             },
                             ticks: {
-                                color: '#888',
+                                color: '#4ecca3',
                                 callback: function(value) {
                                     return value.toFixed(0);
                                 }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Weight (lbs)',
+                                color: '#4ecca3',
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                            ticks: {
+                                color: '#ff6b6b',
+                                callback: function(value) {
+                                    return value.toFixed(0);
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Calories',
+                                color: '#ff6b6b',
                             }
                         }
                     }
@@ -355,9 +427,12 @@
 
         async function updateChart(days) {
             currentDays = days;
-            const data = await loadWeightData(days);
-            renderChart(data);
-            updateStats(data);
+            const [weightData, caloriesData] = await Promise.all([
+                loadWeightData(days),
+                loadCaloriesData(days)
+            ]);
+            renderChart(weightData, caloriesData);
+            updateStats(weightData);
         }
 
         // Toggle button handlers

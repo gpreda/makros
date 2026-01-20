@@ -874,6 +874,13 @@ async def get_weight_history(days: Optional[int] = None):
     return {"history": history}
 
 
+@app.get("/api/daily/history")
+async def get_calories_history(days: Optional[int] = None):
+    """Get daily calories history. Pass days=30, 90, 365 or omit for all."""
+    history = get_storage().get_calories_history(days)
+    return {"history": history}
+
+
 @app.get("/weight")
 async def weight_page():
     """Serve weight chart page."""
