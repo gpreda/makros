@@ -1380,8 +1380,8 @@
             try {
                 const res = await fetch(`/api/meals/${mealId}/copy`, {method: 'POST'});
                 if (!res.ok) throw new Error('Failed to copy');
-                // Go to today and reload
-                goToToday();
+                // Stay on current day, just reload data
+                loadData();
             } catch (e) {
                 alert('Failed to copy meal');
             }
@@ -1391,8 +1391,8 @@
             try {
                 const res = await fetch(`/api/meal-items/${itemId}/copy`, {method: 'POST'});
                 if (!res.ok) throw new Error('Failed to copy');
-                // Go to today and reload
-                goToToday();
+                // Stay on current day, just reload data
+                loadData();
             } catch (e) {
                 alert('Failed to copy item');
             }
