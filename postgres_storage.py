@@ -426,7 +426,7 @@ class PostgresStorage:
                            (image_data IS NOT NULL) as has_image
                     FROM meals
                     WHERE DATE(logged_at) = DATE(%s)
-                    ORDER BY logged_at DESC
+                    ORDER BY logged_at ASC
                     LIMIT %s OFFSET %s
                 """, (date, limit, offset))
             else:
@@ -435,7 +435,7 @@ class PostgresStorage:
                            total_carbs, total_fat, total_fiber, total_alcohol,
                            (image_data IS NOT NULL) as has_image
                     FROM meals
-                    ORDER BY logged_at DESC
+                    ORDER BY logged_at ASC
                     LIMIT %s OFFSET %s
                 """, (limit, offset))
             return [dict(row) for row in cur.fetchall()]
