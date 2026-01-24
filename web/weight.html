@@ -282,13 +282,14 @@
             canvas.style.display = 'block';
 
             // Use {x, y} format with actual dates for proper time-based spacing
+            // Use noon (T12:00:00) to avoid timezone boundary issues
             const weightChartData = weightData.map(d => ({
-                x: new Date(d.date + 'T00:00:00'),
+                x: new Date(d.date + 'T12:00:00'),
                 y: d.weight_lbs
             }));
 
             const caloriesChartData = caloriesData.map(d => ({
-                x: new Date(d.date + 'T00:00:00'),
+                x: new Date(d.date + 'T12:00:00'),
                 y: d.calories
             }));
 
@@ -483,7 +484,7 @@
             const datasets = [
                 {
                     label: 'Protein (g)',
-                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.protein })),
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T12:00:00'), y: d.protein })),
                     borderColor: colors.protein,
                     backgroundColor: 'transparent',
                     borderWidth: 2,
@@ -493,7 +494,7 @@
                 },
                 {
                     label: 'Carbs (g)',
-                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.carbs })),
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T12:00:00'), y: d.carbs })),
                     borderColor: colors.carbs,
                     backgroundColor: 'transparent',
                     borderWidth: 2,
@@ -503,7 +504,7 @@
                 },
                 {
                     label: 'Fat (g)',
-                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.fat })),
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T12:00:00'), y: d.fat })),
                     borderColor: colors.fat,
                     backgroundColor: 'transparent',
                     borderWidth: 2,
@@ -513,7 +514,7 @@
                 },
                 {
                     label: 'Fiber (g)',
-                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.fiber })),
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T12:00:00'), y: d.fiber })),
                     borderColor: colors.fiber,
                     backgroundColor: 'transparent',
                     borderWidth: 2,
@@ -523,7 +524,7 @@
                 },
                 {
                     label: 'Sat Fat (g)',
-                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.saturated_fat })),
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T12:00:00'), y: d.saturated_fat })),
                     borderColor: colors.saturated_fat,
                     backgroundColor: 'transparent',
                     borderWidth: 2,
@@ -533,7 +534,7 @@
                 },
                 {
                     label: 'Added Sugar (g)',
-                    data: macrosData.map(d => ({ x: new Date(d.date + 'T00:00:00'), y: d.added_sugar })),
+                    data: macrosData.map(d => ({ x: new Date(d.date + 'T12:00:00'), y: d.added_sugar })),
                     borderColor: colors.added_sugar,
                     backgroundColor: 'transparent',
                     borderWidth: 2,
