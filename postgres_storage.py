@@ -225,6 +225,23 @@ class PostgresStorage:
                 ON daily_weights(date)
             """)
 
+            # Exercise entries table for tracking burnt calories
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS exercise_entries (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    exercise_type VARCHAR(20) NOT NULL,
+                    amount REAL,
+                    unit VARCHAR(20),
+                    calories_burnt INTEGER NOT NULL,
+                    logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_exercise_entries_date
+                ON exercise_entries(date)
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -753,6 +770,59 @@ class PostgresStorage:
                 'potassium': float(row['potassium'] or 0),
                 'added_sugar': float(row['added_sugar'] or 0),
             } for row in cur.fetchall()]
+
+    # Exercise entry methods
+    def add_exercise_entry(self, date: Optional[datetime], exercise_type: str,
+                           amount: Optional[float], unit: Optional[str],
+                           calories_burnt: int) -> int:
+        """Add an exercise entry. Returns the entry id."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO exercise_entries (date, exercise_type, amount, unit, calories_burnt)
+                VALUES (DATE(%s), %s, %s, %s, %s)
+                RETURNING id
+            """, (date, exercise_type, amount, unit, calories_burnt))
+            entry_id = cur.fetchone()[0]
+        self.conn.commit()
+        return entry_id
+
+    def get_exercise_entries(self, date: Optional[datetime] = None) -> list[dict]:
+        """Get exercise entries for a specific date."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, date, exercise_type, amount, unit, calories_burnt, logged_at
+                FROM exercise_entries
+                WHERE date = DATE(%s)
+                ORDER BY logged_at ASC
+            """, (date,))
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_daily_burnt_calories(self, date: Optional[datetime] = None) -> int:
+        """Get total burnt calories for a specific date."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(SUM(calories_burnt), 0)
+                FROM exercise_entries
+                WHERE date = DATE(%s)
+            """, (date,))
+            return cur.fetchone()[0]
+
+    def delete_exercise_entry(self, entry_id: int) -> bool:
+        """Delete an exercise entry. Returns True if deleted."""
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM exercise_entries WHERE id = %s", (entry_id,))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
 
     # Event logging (shared with tongue app)
     def log_event(self, event: str, user_id: str, session_id: str = None,

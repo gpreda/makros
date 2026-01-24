@@ -253,6 +253,106 @@
         .weight-chart-link:hover {
             background: #1a4a7a;
         }
+        .burnt-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .burnt-label {
+            color: #888;
+            font-size: 14px;
+        }
+        #burnt-calories {
+            color: #ff6b6b;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .burnt-unit {
+            color: #888;
+            font-size: 14px;
+        }
+        .exercise-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .exercise-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .exercise-label {
+            color: #888;
+            font-size: 14px;
+            min-width: 100px;
+        }
+        .exercise-row input {
+            width: 80px;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 6px;
+            background: #0f3460;
+            color: #4ecca3;
+            font-size: 14px;
+            text-align: center;
+        }
+        .exercise-row input:focus {
+            outline: 2px solid #4ecca3;
+        }
+        .exercise-row select {
+            padding: 8px 10px;
+            border: none;
+            border-radius: 6px;
+            background: #0f3460;
+            color: #4ecca3;
+            font-size: 14px;
+        }
+        .exercise-unit-fixed {
+            color: #888;
+            font-size: 14px;
+        }
+        .exercise-row button {
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 8px 16px;
+            font-size: 14px;
+            margin: 0;
+        }
+        .exercise-row button:hover {
+            background: #1a4a7a;
+        }
+        .exercise-list {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #0f3460;
+        }
+        .exercise-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+        .exercise-item:last-child {
+            border-bottom: none;
+        }
+        .exercise-item .desc {
+            color: #eee;
+            font-size: 14px;
+        }
+        .exercise-item .calories {
+            color: #ff6b6b;
+            font-weight: 600;
+        }
+        .exercise-item .delete-btn {
+            background: transparent;
+            color: #ff4757;
+            padding: 4px 8px;
+            font-size: 12px;
+            margin: 0;
+        }
         .meal-list {
             max-height: 400px;
             overflow-y: auto;
@@ -602,6 +702,11 @@
                 <button class="weight-save-btn" onclick="saveWeight()">Save</button>
                 <a href="/weight" class="weight-chart-link" title="View weight chart">Chart</a>
             </div>
+            <div class="burnt-row">
+                <span class="burnt-label">Burnt Calories:</span>
+                <span id="burnt-calories">0</span>
+                <span class="burnt-unit">kcal</span>
+            </div>
         </div>
 
         <!-- Analyze Meal -->
@@ -666,6 +771,38 @@
             <div id="breakdown-content">
                 <div class="loading">Loading...</div>
             </div>
+        </div>
+
+        <!-- Exercise Tracking -->
+        <div class="card">
+            <h2>Log Exercise</h2>
+            <div class="exercise-inputs">
+                <div class="exercise-row">
+                    <span class="exercise-label">Walking:</span>
+                    <input type="number" id="walking-amount" placeholder="0" min="0" step="0.1">
+                    <select id="walking-unit">
+                        <option value="miles">miles</option>
+                        <option value="steps">steps</option>
+                    </select>
+                    <button onclick="logExercise('walking')">Add</button>
+                </div>
+                <div class="exercise-row">
+                    <span class="exercise-label">Running:</span>
+                    <input type="number" id="running-amount" placeholder="0" min="0" step="0.1">
+                    <span class="exercise-unit-fixed">miles</span>
+                    <button onclick="logExercise('running')">Add</button>
+                </div>
+                <div class="exercise-row">
+                    <span class="exercise-label">Weightlifting:</span>
+                    <select id="weightlifting-intensity">
+                        <option value="light">Light (50 kcal)</option>
+                        <option value="moderate">Moderate (100 kcal)</option>
+                        <option value="heavy">Heavy (150 kcal)</option>
+                    </select>
+                    <button onclick="logExercise('weightlifting')">Add</button>
+                </div>
+            </div>
+            <div id="exercise-list" class="exercise-list"></div>
         </div>
     </div>
 
@@ -1005,6 +1142,108 @@
             loadWeight();
             loadMeals();
             loadBreakdown();
+            loadExercise();
+        }
+
+        async function loadExercise() {
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/exercise?date=${dateStr}`);
+                const data = await res.json();
+
+                document.getElementById('burnt-calories').textContent = data.total_burnt || 0;
+                renderExerciseList(data.entries || []);
+            } catch (e) {
+                console.error('Failed to load exercise:', e);
+            }
+        }
+
+        function renderExerciseList(entries) {
+            const list = document.getElementById('exercise-list');
+            if (entries.length === 0) {
+                list.innerHTML = '';
+                return;
+            }
+
+            list.innerHTML = entries.map(entry => {
+                let desc;
+                if (entry.exercise_type === 'walking') {
+                    desc = `Walking: ${entry.amount} ${entry.unit}`;
+                } else if (entry.exercise_type === 'running') {
+                    desc = `Running: ${entry.amount} miles`;
+                } else if (entry.exercise_type === 'weightlifting') {
+                    desc = `Weightlifting: ${entry.unit}`;
+                }
+                return `
+                    <div class="exercise-item">
+                        <span class="desc">${desc}</span>
+                        <span class="calories">${entry.calories_burnt} kcal</span>
+                        <button class="delete-btn" onclick="deleteExercise(${entry.id})">&#x2715;</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function logExercise(type) {
+            let amount, unit;
+
+            if (type === 'walking') {
+                amount = parseFloat(document.getElementById('walking-amount').value);
+                unit = document.getElementById('walking-unit').value;
+                if (!amount || amount <= 0) {
+                    alert('Please enter a valid amount');
+                    return;
+                }
+            } else if (type === 'running') {
+                amount = parseFloat(document.getElementById('running-amount').value);
+                unit = 'miles';
+                if (!amount || amount <= 0) {
+                    alert('Please enter a valid distance');
+                    return;
+                }
+            } else if (type === 'weightlifting') {
+                unit = document.getElementById('weightlifting-intensity').value;
+                amount = null;
+            }
+
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/exercise?date=${dateStr}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        exercise_type: type,
+                        amount: amount,
+                        unit: unit
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Failed to log exercise');
+                }
+
+                // Clear inputs
+                if (type === 'walking') {
+                    document.getElementById('walking-amount').value = '';
+                } else if (type === 'running') {
+                    document.getElementById('running-amount').value = '';
+                }
+
+                loadExercise();
+            } catch (e) {
+                alert(e.message);
+            }
+        }
+
+        async function deleteExercise(entryId) {
+            try {
+                const res = await fetch(`/api/exercise/${entryId}`, {method: 'DELETE'});
+                if (!res.ok) throw new Error('Failed to delete');
+                loadExercise();
+            } catch (e) {
+                alert('Failed to delete exercise');
+            }
         }
 
         async function analyzeMeal() {

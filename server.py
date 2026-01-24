@@ -943,6 +943,99 @@ async def get_macros_history(days: Optional[int] = None):
     return {"history": history}
 
 
+# Exercise tracking endpoints
+class ExerciseRequest(BaseModel):
+    exercise_type: str  # 'walking', 'running', 'weightlifting'
+    amount: Optional[float] = None  # steps or miles
+    unit: Optional[str] = None  # 'steps', 'miles', or intensity for weightlifting
+
+
+def calculate_burnt_calories(exercise_type: str, amount: Optional[float],
+                             unit: Optional[str], weight_lbs: float) -> int:
+    """Calculate calories burnt based on exercise type and user weight."""
+    if exercise_type == 'walking':
+        if unit == 'steps':
+            # Convert steps to miles (approx 2000 steps per mile)
+            miles = amount / 2000
+        else:
+            miles = amount
+        return int(0.55 * weight_lbs * miles)
+    elif exercise_type == 'running':
+        miles = amount
+        return int(0.72 * weight_lbs * miles)
+    elif exercise_type == 'weightlifting':
+        # unit contains intensity: 'light', 'moderate', 'heavy'
+        if unit == 'light':
+            return 50
+        elif unit == 'moderate':
+            return 100
+        elif unit == 'heavy':
+            return 150
+    return 0
+
+
+@app.post("/api/exercise")
+async def add_exercise(request: ExerciseRequest, date: Optional[str] = None):
+    """Add an exercise entry."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    # Get current weight to calculate calories
+    weight = get_storage().get_weight(dt)
+    if not weight:
+        raise HTTPException(status_code=400, detail="Please log your weight first")
+
+    calories = calculate_burnt_calories(
+        request.exercise_type, request.amount, request.unit, weight
+    )
+
+    entry_id = get_storage().add_exercise_entry(
+        dt, request.exercise_type, request.amount, request.unit, calories
+    )
+
+    log_event('exercise.add',
+              exercise_type=request.exercise_type,
+              amount=request.amount,
+              unit=request.unit,
+              calories_burnt=calories)
+
+    return {"id": entry_id, "calories_burnt": calories}
+
+
+@app.get("/api/exercise")
+async def get_exercise(date: Optional[str] = None):
+    """Get exercise entries and total burnt calories for a date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    entries = get_storage().get_exercise_entries(dt)
+    total_burnt = get_storage().get_daily_burnt_calories(dt)
+
+    # Convert date objects to strings for JSON serialization
+    for entry in entries:
+        entry['date'] = str(entry['date'])
+        entry['logged_at'] = entry['logged_at'].isoformat()
+
+    return {"entries": entries, "total_burnt": total_burnt}
+
+
+@app.delete("/api/exercise/{entry_id}")
+async def delete_exercise(entry_id: int):
+    """Delete an exercise entry."""
+    if get_storage().delete_exercise_entry(entry_id):
+        log_event('exercise.delete', entry_id=entry_id)
+        return {"message": "Exercise entry deleted"}
+    raise HTTPException(status_code=404, detail="Exercise entry not found")
+
+
 @app.get("/weight")
 async def weight_page():
     """Serve weight chart page."""
