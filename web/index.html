@@ -240,6 +240,74 @@
         .weight-save-btn:hover {
             background: #1a4a7a;
         }
+        .target-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .target-label {
+            color: #888;
+            font-size: 14px;
+        }
+        .target-row input {
+            width: 80px;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 6px;
+            background: #0f3460;
+            color: #4ecca3;
+            font-size: 16px;
+            font-weight: 600;
+            text-align: center;
+        }
+        .target-row input:focus {
+            outline: 2px solid #4ecca3;
+        }
+        .target-unit {
+            color: #888;
+            font-size: 14px;
+        }
+        .target-save-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 8px 16px;
+            font-size: 14px;
+            margin-top: 0;
+        }
+        .target-save-btn:hover {
+            background: #1a4a7a;
+        }
+        .target-info {
+            font-size: 12px;
+            margin-top: 4px;
+            text-align: center;
+        }
+        .target-info.under {
+            color: #4ecca3;
+        }
+        .target-info.over {
+            color: #ff6b6b;
+        }
+        .calorie-progress {
+            width: 100%;
+            height: 4px;
+            background: #1a1a2e;
+            border-radius: 2px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+        .calorie-progress-bar {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+        .calorie-progress-bar.under {
+            background: #4ecca3;
+        }
+        .calorie-progress-bar.over {
+            background: #ff6b6b;
+        }
         .weight-chart-link {
             background: #0f3460;
             color: #4ecca3;
@@ -607,6 +675,27 @@
         .table-scroll table {
             min-width: 700px;
         }
+        .progress-photo-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .progress-upload-btn {
+            display: inline-block;
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .progress-upload-btn:hover {
+            background: #1a4a7a;
+        }
+        .progress-upload-btn input {
+            display: none;
+        }
         @media (max-width: 600px) {
             th, td {
                 padding: 6px 4px;
@@ -647,6 +736,10 @@
                 <div class="stat-box">
                     <div class="value" id="daily-calories">-</div>
                     <div class="label">Calories</div>
+                    <div class="calorie-progress hidden" id="calorie-progress">
+                        <div class="calorie-progress-bar" id="calorie-progress-bar"></div>
+                    </div>
+                    <div class="target-info hidden" id="target-info"></div>
                 </div>
                 <div class="stat-box">
                     <div class="value" id="daily-protein">-</div>
@@ -701,6 +794,12 @@
                 <span class="weight-unit">lbs</span>
                 <button class="weight-save-btn" onclick="saveWeight()">Save</button>
                 <a href="/weight" class="weight-chart-link" title="View weight chart">Chart</a>
+            </div>
+            <div class="target-row">
+                <span class="target-label">Caloric Target:</span>
+                <input type="number" id="target-input" placeholder="--" step="1" min="0">
+                <span class="target-unit">kcal</span>
+                <button class="target-save-btn" onclick="saveCaloricTarget()">Save</button>
             </div>
             <div class="burnt-row">
                 <span class="burnt-label">Burnt Calories:</span>
@@ -803,6 +902,24 @@
                 </div>
             </div>
             <div id="exercise-list" class="exercise-list"></div>
+        </div>
+
+        <!-- Progress Photo -->
+        <div class="card">
+            <h2>Progress Photo</h2>
+            <div id="progress-photo-area" class="progress-photo-row">
+                <div id="progress-photo-upload">
+                    <label class="progress-upload-btn">
+                        <input type="file" accept="image/*" onchange="uploadProgressPhoto(event)">
+                        <span id="progress-upload-label">Upload Photo</span>
+                    </label>
+                </div>
+                <div id="progress-photo-display" class="hidden">
+                    <button class="image-btn" onclick="viewProgressPhoto()" title="View photo">&#x1F4F7;</button>
+                    <button class="delete-btn" onclick="deleteProgressPhoto()" title="Delete photo">&times;</button>
+                </div>
+                <a href="/progression" class="progress-upload-btn" style="text-decoration:none;">Progression</a>
+            </div>
         </div>
     </div>
 
@@ -908,6 +1025,36 @@
                 document.getElementById('daily-sodium').textContent = Math.round(data.sodium || 0);
                 document.getElementById('daily-potassium').textContent = Math.round(data.potassium || 0);
                 document.getElementById('daily-added-sugar').textContent = (data.added_sugar || 0).toFixed(1);
+
+                // Update caloric target progress bar
+                const progressContainer = document.getElementById('calorie-progress');
+                const progressBar = document.getElementById('calorie-progress-bar');
+                const targetInfo = document.getElementById('target-info');
+                const target = data.caloric_target;
+                const calories = Math.round(data.calories);
+
+                if (target) {
+                    progressContainer.classList.remove('hidden');
+                    targetInfo.classList.remove('hidden');
+                    const pct = Math.min((calories / target) * 100, 100);
+                    progressBar.style.width = pct + '%';
+
+                    if (calories <= target) {
+                        const remaining = target - calories;
+                        progressBar.className = 'calorie-progress-bar under';
+                        targetInfo.className = 'target-info under';
+                        targetInfo.textContent = `${remaining} remaining (${target})`;
+                    } else {
+                        const over = calories - target;
+                        progressBar.style.width = '100%';
+                        progressBar.className = 'calorie-progress-bar over';
+                        targetInfo.className = 'target-info over';
+                        targetInfo.textContent = `${over} over target (${target})`;
+                    }
+                } else {
+                    progressContainer.classList.add('hidden');
+                    targetInfo.classList.add('hidden');
+                }
             } catch (e) {
                 console.error('Failed to load daily summary:', e);
             }
@@ -948,6 +1095,45 @@
                 if (!res.ok) throw new Error('Failed to save');
             } catch (e) {
                 alert('Failed to save weight');
+            }
+        }
+
+        async function loadCaloricTarget() {
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/caloric-target?date=${dateStr}`);
+                const data = await res.json();
+                const input = document.getElementById('target-input');
+                if (data.target_calories) {
+                    input.value = data.target_calories;
+                } else {
+                    input.value = '';
+                }
+            } catch (e) {
+                console.error('Failed to load caloric target:', e);
+            }
+        }
+
+        async function saveCaloricTarget() {
+            const input = document.getElementById('target-input');
+            const target = parseInt(input.value);
+
+            if (!target || target <= 0) {
+                alert('Please enter a valid caloric target');
+                return;
+            }
+
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/caloric-target?date=${dateStr}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({target_calories: target})
+                });
+                if (!res.ok) throw new Error('Failed to save');
+                loadDailySummary();
+            } catch (e) {
+                alert('Failed to save caloric target');
             }
         }
 
@@ -1140,9 +1326,11 @@
         function loadData() {
             loadDailySummary();
             loadWeight();
+            loadCaloricTarget();
             loadMeals();
             loadBreakdown();
             loadExercise();
+            loadProgressPhoto();
         }
 
         async function loadExercise() {
@@ -1674,6 +1862,75 @@
             document.getElementById('image-modal').classList.remove('active');
         }
 
+        async function loadProgressPhoto() {
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/progress-photo/check?date=${dateStr}`);
+                const data = await res.json();
+
+                const uploadDiv = document.getElementById('progress-photo-upload');
+                const displayDiv = document.getElementById('progress-photo-display');
+                const label = document.getElementById('progress-upload-label');
+
+                const dayLabel = isToday(currentDate) ? 'Today' : currentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                label.textContent = `Upload (${dayLabel})`;
+
+                if (data.has_photo) {
+                    uploadDiv.classList.add('hidden');
+                    displayDiv.classList.remove('hidden');
+                } else {
+                    uploadDiv.classList.remove('hidden');
+                    displayDiv.classList.add('hidden');
+                }
+            } catch (e) {
+                console.error('Failed to load progress photo:', e);
+            }
+        }
+
+        async function uploadProgressPhoto(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('image', file);
+            const dateStr = getDateString(currentDate);
+
+            try {
+                const res = await fetch(`/api/progress-photo?date=${dateStr}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!res.ok) throw new Error('Upload failed');
+                loadProgressPhoto();
+            } catch (e) {
+                alert('Failed to upload progress photo');
+            }
+
+            // Reset file input so the same file can be re-selected
+            event.target.value = '';
+        }
+
+        async function deleteProgressPhoto() {
+            if (!confirm('Delete this progress photo?')) return;
+
+            try {
+                const dateStr = getDateString(currentDate);
+                const res = await fetch(`/api/progress-photo?date=${dateStr}`, {method: 'DELETE'});
+                if (!res.ok) throw new Error('Delete failed');
+                loadProgressPhoto();
+            } catch (e) {
+                alert('Failed to delete progress photo');
+            }
+        }
+
+        function viewProgressPhoto() {
+            const modal = document.getElementById('image-modal');
+            const modalImg = document.getElementById('modal-image');
+            const dateStr = getDateString(currentDate);
+            modalImg.src = `/api/progress-photo?date=${dateStr}`;
+            modal.classList.add('active');
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -1697,6 +1954,13 @@
             if (e.key === 'Enter') {
                 e.preventDefault();
                 saveWeight();
+            }
+        });
+
+        document.getElementById('target-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveCaloricTarget();
             }
         });
 

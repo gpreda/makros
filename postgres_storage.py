@@ -242,6 +242,36 @@ class PostgresStorage:
                 ON exercise_entries(date)
             """)
 
+            # Caloric targets table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS caloric_targets (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL UNIQUE,
+                    target_calories INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_caloric_targets_date
+                ON caloric_targets(date)
+            """)
+
+            # Progress photos table (one per day)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS progress_photos (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL UNIQUE,
+                    image_data BYTEA NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_progress_photos_date
+                ON progress_photos(date)
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -823,6 +853,109 @@ class PostgresStorage:
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
+
+    # Caloric target operations
+    def set_caloric_target(self, target_calories: int, date: Optional[datetime] = None) -> None:
+        """Set caloric target for a specific date. Updates if exists, inserts if not."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO caloric_targets (date, target_calories)
+                VALUES (DATE(%s), %s)
+                ON CONFLICT (date)
+                DO UPDATE SET target_calories = %s, updated_at = CURRENT_TIMESTAMP
+            """, (date, target_calories, target_calories))
+        self.conn.commit()
+
+    def get_caloric_target(self, date: Optional[datetime] = None) -> Optional[int]:
+        """Get caloric target for a specific date (carry-forward lookup).
+        Returns the most recent target set on or before the given date."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT target_calories FROM caloric_targets
+                WHERE date <= DATE(%s)
+                ORDER BY date DESC LIMIT 1
+            """, (date,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def delete_caloric_target(self, date: Optional[datetime] = None) -> bool:
+        """Delete caloric target for a specific date. Returns True if deleted."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM caloric_targets WHERE date = DATE(%s)", (date,))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
+
+    def get_caloric_target_history(self, days: Optional[int] = None) -> list[dict]:
+        """Get caloric target change-point history for charting."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if days:
+                cur.execute("""
+                    SELECT date, target_calories
+                    FROM caloric_targets
+                    WHERE date >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    ORDER BY date ASC
+                """, (days,))
+            else:
+                cur.execute("""
+                    SELECT date, target_calories
+                    FROM caloric_targets
+                    ORDER BY date ASC
+                """)
+            return [{'date': str(row['date']), 'target_calories': row['target_calories']} for row in cur.fetchall()]
+
+    # Progress photo operations
+    def save_progress_photo(self, date, image_data: bytes) -> None:
+        """Save a progress photo for a specific date. Updates if exists, inserts if not."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO progress_photos (date, image_data)
+                VALUES (DATE(%s), %s)
+                ON CONFLICT (date)
+                DO UPDATE SET image_data = %s, updated_at = CURRENT_TIMESTAMP
+            """, (date, psycopg2.Binary(image_data), psycopg2.Binary(image_data)))
+        self.conn.commit()
+
+    def get_progress_photo(self, date) -> Optional[bytes]:
+        """Get progress photo for a specific date. Returns raw bytes or None."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT image_data FROM progress_photos WHERE date = DATE(%s)", (date,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return bytes(row[0])
+        return None
+
+    def delete_progress_photo(self, date) -> bool:
+        """Delete progress photo for a specific date. Returns True if deleted."""
+        if date is None:
+            date = datetime.now()
+
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM progress_photos WHERE date = DATE(%s)", (date,))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
+
+    def get_progress_photo_dates(self) -> list[str]:
+        """Get all dates that have progress photos, most recent first."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT date FROM progress_photos ORDER BY date DESC")
+            return [str(row[0]) for row in cur.fetchall()]
 
     # Event logging (shared with tongue app)
     def log_event(self, event: str, user_id: str, session_id: str = None,

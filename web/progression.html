@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Makros - Progression</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .header-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 30px;
+            gap: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #4ecca3;
+            margin: 0;
+        }
+        .back-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .back-btn:hover {
+            background: #1a4a7a;
+        }
+        .photo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 12px;
+        }
+        .photo-card {
+            background: #16213e;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        .photo-card:hover {
+            outline: 2px solid #4ecca3;
+        }
+        .photo-card img {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+            display: block;
+        }
+        .photo-card .date-label {
+            padding: 8px;
+            text-align: center;
+            font-size: 13px;
+            color: #888;
+        }
+        .empty {
+            text-align: center;
+            color: #888;
+            padding: 40px 20px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 8px;
+        }
+        .modal .close-btn {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            background: transparent;
+            color: white;
+            border: none;
+            font-size: 36px;
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-row">
+            <a href="/" class="back-btn">&larr; Back</a>
+            <h1>Progression</h1>
+        </div>
+        <div id="photo-grid" class="photo-grid">
+            <div class="empty">Loading...</div>
+        </div>
+    </div>
+
+    <div id="image-modal" class="modal" onclick="closeModal()">
+        <button class="close-btn">&times;</button>
+        <img id="modal-image" src="" alt="Progress photo">
+    </div>
+
+    <script>
+        async function loadPhotos() {
+            const grid = document.getElementById('photo-grid');
+            try {
+                const res = await fetch('/api/progress-photos');
+                const data = await res.json();
+
+                if (!data.dates || data.dates.length === 0) {
+                    grid.innerHTML = '<div class="empty">No progress photos yet</div>';
+                    return;
+                }
+
+                grid.innerHTML = data.dates.map(dateStr => {
+                    const d = new Date(dateStr + 'T00:00:00');
+                    const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                    return `
+                        <div class="photo-card" onclick="viewPhoto('${dateStr}')">
+                            <img src="/api/progress-photo?date=${dateStr}" alt="${label}" loading="lazy">
+                            <div class="date-label">${label}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                grid.innerHTML = '<div class="empty">Failed to load photos</div>';
+            }
+        }
+
+        function viewPhoto(dateStr) {
+            const modal = document.getElementById('image-modal');
+            const img = document.getElementById('modal-image');
+            img.src = `/api/progress-photo?date=${dateStr}`;
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('image-modal').classList.remove('active');
+        }
+
+        document.getElementById('modal-image').addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        loadPhotos();
+    </script>
+</body>
+</html>

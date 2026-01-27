@@ -837,14 +837,17 @@ async def copy_meal(meal_id: int):
 
 @app.get("/api/daily")
 async def get_daily_totals(date: Optional[str] = None):
-    """Get daily nutrition totals."""
+    """Get daily nutrition totals, including caloric target."""
     dt = None
     if date:
         try:
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-    return get_storage().get_daily_totals(dt)
+    storage = get_storage()
+    result = storage.get_daily_totals(dt)
+    result['caloric_target'] = storage.get_caloric_target(dt)
+    return result
 
 
 @app.get("/api/daily/breakdown")
@@ -944,6 +947,10 @@ async def get_macros_history(days: Optional[int] = None):
 
 
 # Exercise tracking endpoints
+class CaloricTargetRequest(BaseModel):
+    target_calories: int
+
+
 class ExerciseRequest(BaseModel):
     exercise_type: str  # 'walking', 'running', 'weightlifting'
     amount: Optional[float] = None  # steps or miles
@@ -1034,6 +1041,160 @@ async def delete_exercise(entry_id: int):
         log_event('exercise.delete', entry_id=entry_id)
         return {"message": "Exercise entry deleted"}
     raise HTTPException(status_code=404, detail="Exercise entry not found")
+
+
+@app.get("/api/caloric-target")
+async def get_caloric_target(date: Optional[str] = None):
+    """Get caloric target for a specific date (carry-forward lookup)."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+    target = get_storage().get_caloric_target(dt)
+    return {"target_calories": target}
+
+
+@app.post("/api/caloric-target")
+async def set_caloric_target(request: CaloricTargetRequest, date: Optional[str] = None):
+    """Set caloric target for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    db_start = time.time()
+    get_storage().set_caloric_target(request.target_calories, dt)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    log_event('caloric_target.set',
+              ms=db_ms,
+              target_calories=request.target_calories,
+              date=date or datetime.now().strftime('%Y-%m-%d'))
+
+    return {"message": "Caloric target saved", "target_calories": request.target_calories}
+
+
+@app.delete("/api/caloric-target")
+async def delete_caloric_target(date: Optional[str] = None):
+    """Delete caloric target for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    db_start = time.time()
+    deleted = get_storage().delete_caloric_target(dt)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    if deleted:
+        log_event('caloric_target.delete',
+                  ms=db_ms,
+                  date=date or datetime.now().strftime('%Y-%m-%d'))
+        return {"message": "Caloric target deleted"}
+    raise HTTPException(status_code=404, detail="No caloric target found for this date")
+
+
+@app.get("/api/caloric-target/history")
+async def get_caloric_target_history(days: Optional[int] = None):
+    """Get caloric target change-point history. Pass days=30, 90, 365 or omit for all."""
+    history = get_storage().get_caloric_target_history(days)
+    return {"history": history}
+
+
+@app.post("/api/progress-photo")
+async def upload_progress_photo(image: UploadFile = File(...), date: Optional[str] = None):
+    """Upload a progress photo for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    image_data = await image.read()
+    db_start = time.time()
+    get_storage().save_progress_photo(dt, image_data)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    log_event('progress_photo.upload',
+              ms=db_ms,
+              date=date or datetime.now().strftime('%Y-%m-%d'))
+
+    return {"message": "Progress photo saved"}
+
+
+@app.get("/api/progress-photo")
+async def get_progress_photo(date: Optional[str] = None):
+    """Get progress photo for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    image_data = get_storage().get_progress_photo(dt)
+    if not image_data:
+        raise HTTPException(status_code=404, detail="No progress photo found for this date")
+    return Response(content=image_data, media_type="image/jpeg")
+
+
+@app.delete("/api/progress-photo")
+async def delete_progress_photo(date: Optional[str] = None):
+    """Delete progress photo for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    db_start = time.time()
+    deleted = get_storage().delete_progress_photo(dt)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    if deleted:
+        log_event('progress_photo.delete',
+                  ms=db_ms,
+                  date=date or datetime.now().strftime('%Y-%m-%d'))
+        return {"message": "Progress photo deleted"}
+    raise HTTPException(status_code=404, detail="No progress photo found for this date")
+
+
+@app.get("/api/progress-photo/check")
+async def check_progress_photo(date: Optional[str] = None):
+    """Check if a progress photo exists for a specific date."""
+    dt = None
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    image_data = get_storage().get_progress_photo(dt)
+    return {"has_photo": image_data is not None}
+
+
+@app.get("/api/progress-photos")
+async def list_progress_photos():
+    """List all dates that have progress photos, most recent first."""
+    dates = get_storage().get_progress_photo_dates()
+    return {"dates": dates}
+
+
+@app.get("/progression")
+async def progression_page():
+    """Serve progression page."""
+    path = WEB_DIR / "progression.html"
+    if path.exists():
+        return FileResponse(path)
+    return {"message": "Progression page not found"}
 
 
 @app.get("/weight")
