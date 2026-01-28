@@ -642,6 +642,20 @@
             background: #ff4757;
             color: white;
         }
+        .macros-expand-toggle {
+            text-align: center;
+            color: #888;
+            font-size: 13px;
+            cursor: pointer;
+            padding: 8px 0 0;
+            user-select: none;
+        }
+        .macros-expand-toggle:hover {
+            color: #4ecca3;
+        }
+        .macros-expandable {
+            margin-top: 8px;
+        }
         .extended-nutrients {
             display: flex;
             flex-wrap: wrap;
@@ -715,11 +729,6 @@
 </head>
 <body>
     <div class="container">
-        <div class="header-row">
-            <h1>Makros</h1>
-            <a href="/items" class="items-btn">Items Database</a>
-        </div>
-
         <!-- Daily Summary with Navigation -->
         <div class="card">
             <div class="day-nav">
@@ -745,24 +754,28 @@
                     <div class="value" id="daily-protein">-</div>
                     <div class="label">Protein (g)</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" id="daily-carbs">-</div>
-                    <div class="label">Carbs (g)</div>
-                </div>
-                <div class="stat-box">
-                    <div class="value" id="daily-fat">-</div>
-                    <div class="label">Fat (g)</div>
-                </div>
-                <div class="stat-box">
-                    <div class="value" id="daily-fiber">-</div>
-                    <div class="label">Fiber (g)</div>
-                </div>
-                <div class="stat-box">
-                    <div class="value" id="daily-alcohol">-</div>
-                    <div class="label">Alcohol (g)</div>
-                </div>
             </div>
-            <div class="extended-nutrients" id="extended-nutrients">
+            <div class="macros-expand-toggle" id="macros-toggle" onclick="toggleMacros()">More macros &#x25BC;</div>
+            <div class="macros-expandable hidden" id="macros-expandable">
+                <div class="daily-summary">
+                    <div class="stat-box">
+                        <div class="value" id="daily-carbs">-</div>
+                        <div class="label">Carbs (g)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="value" id="daily-fat">-</div>
+                        <div class="label">Fat (g)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="value" id="daily-fiber">-</div>
+                        <div class="label">Fiber (g)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="value" id="daily-alcohol">-</div>
+                        <div class="label">Alcohol (g)</div>
+                    </div>
+                </div>
+                <div class="extended-nutrients" id="extended-nutrients">
                 <div class="mini-stat">
                     <div class="value" id="daily-sat-fat">-</div>
                     <div class="label">Sat Fat (g)</div>
@@ -788,18 +801,17 @@
                     <div class="label">Added Sugar (g)</div>
                 </div>
             </div>
+            </div>
             <div class="weight-row">
                 <span class="weight-label">Morning Weight:</span>
-                <input type="number" id="weight-input" placeholder="--" step="0.1" min="0">
+                <input type="number" id="weight-input" placeholder="--" step="0.1" min="0" onkeydown="if(event.key==='Enter'){saveWeight();event.preventDefault();}">
                 <span class="weight-unit">lbs</span>
-                <button class="weight-save-btn" onclick="saveWeight()">Save</button>
                 <a href="/weight" class="weight-chart-link" title="View weight chart">Chart</a>
             </div>
             <div class="target-row">
                 <span class="target-label">Caloric Target:</span>
-                <input type="number" id="target-input" placeholder="--" step="1" min="0">
+                <input type="number" id="target-input" placeholder="--" step="1" min="0" onkeydown="if(event.key==='Enter'){saveCaloricTarget();event.preventDefault();}">
                 <span class="target-unit">kcal</span>
-                <button class="target-save-btn" onclick="saveCaloricTarget()">Save</button>
             </div>
             <div class="burnt-row">
                 <span class="burnt-label">Burnt Calories:</span>
@@ -878,27 +890,25 @@
             <div class="exercise-inputs">
                 <div class="exercise-row">
                     <span class="exercise-label">Walking:</span>
-                    <input type="number" id="walking-amount" placeholder="0" min="0" step="0.1">
+                    <input type="number" id="walking-amount" placeholder="0" min="0" step="0.1" onkeydown="if(event.key==='Enter'){logExercise('walking');event.preventDefault();}">
                     <select id="walking-unit">
                         <option value="miles">miles</option>
                         <option value="steps">steps</option>
                     </select>
-                    <button onclick="logExercise('walking')">Add</button>
                 </div>
                 <div class="exercise-row">
                     <span class="exercise-label">Running:</span>
-                    <input type="number" id="running-amount" placeholder="0" min="0" step="0.1">
+                    <input type="number" id="running-amount" placeholder="0" min="0" step="0.1" onkeydown="if(event.key==='Enter'){logExercise('running');event.preventDefault();}">
                     <span class="exercise-unit-fixed">miles</span>
-                    <button onclick="logExercise('running')">Add</button>
                 </div>
                 <div class="exercise-row">
                     <span class="exercise-label">Weightlifting:</span>
-                    <select id="weightlifting-intensity">
+                    <select id="weightlifting-intensity" onchange="if(this.value!=='none'){logExercise('weightlifting');}">
+                        <option value="none">Select intensity</option>
                         <option value="light">Light (50 kcal)</option>
                         <option value="moderate">Moderate (100 kcal)</option>
                         <option value="heavy">Heavy (150 kcal)</option>
                     </select>
-                    <button onclick="logExercise('weightlifting')">Add</button>
                 </div>
             </div>
             <div id="exercise-list" class="exercise-list"></div>
@@ -919,6 +929,20 @@
                     <button class="delete-btn" onclick="deleteProgressPhoto()" title="Delete photo">&times;</button>
                 </div>
                 <a href="/progression" class="progress-upload-btn" style="text-decoration:none;">Progression</a>
+            </div>
+        </div>
+
+        <!-- Bottom Day Navigation -->
+        <div class="card" id="bottom-day-nav">
+            <div class="day-nav">
+                <div class="day-nav-buttons">
+                    <button class="nav-btn" onclick="prevDayBottom()" title="Previous day">&larr;</button>
+                </div>
+                <h2 id="day-title-bottom">Today</h2>
+                <div class="day-nav-buttons">
+                    <button class="nav-btn" id="next-btn-bottom" onclick="nextDayBottom()" title="Next day">&rarr;</button>
+                    <button class="today-btn" id="today-btn-bottom" onclick="goToTodayBottom()">Today</button>
+                </div>
             </div>
         </div>
     </div>
@@ -961,20 +985,39 @@
             return date.toLocaleDateString('en-US', options);
         }
 
+        function toggleMacros() {
+            const el = document.getElementById('macros-expandable');
+            const toggle = document.getElementById('macros-toggle');
+            if (el.classList.contains('hidden')) {
+                el.classList.remove('hidden');
+                toggle.innerHTML = 'Less macros &#x25B2;';
+            } else {
+                el.classList.add('hidden');
+                toggle.innerHTML = 'More macros &#x25BC;';
+            }
+        }
+
         function updateDayNav() {
-            document.getElementById('day-title').textContent = formatDateTitle(currentDate);
+            const title = formatDateTitle(currentDate);
+            document.getElementById('day-title').textContent = title;
+            document.getElementById('day-title-bottom').textContent = title;
 
             // Hide/show Today button
             const todayBtn = document.getElementById('today-btn');
+            const todayBtnBottom = document.getElementById('today-btn-bottom');
             if (isToday(currentDate)) {
                 todayBtn.classList.add('hidden');
+                todayBtnBottom.classList.add('hidden');
             } else {
                 todayBtn.classList.remove('hidden');
+                todayBtnBottom.classList.remove('hidden');
             }
 
             // Next button always enabled now (for timezone issues)
             const nextBtn = document.getElementById('next-btn');
+            const nextBtnBottom = document.getElementById('next-btn-bottom');
             nextBtn.disabled = false;
+            nextBtnBottom.disabled = false;
 
             // Show/hide analyze card (show for today and past days, not future)
             const analyzeCard = document.getElementById('analyze-card');
@@ -988,6 +1031,8 @@
                 analyzeCard.classList.add('hidden');
             }
         }
+
+        let scrollToBottomAfterLoad = false;
 
         function prevDay() {
             currentDate.setDate(currentDate.getDate() - 1);
@@ -1005,6 +1050,21 @@
             currentDate = new Date();
             updateDayNav();
             loadData();
+        }
+
+        function prevDayBottom() {
+            scrollToBottomAfterLoad = true;
+            prevDay();
+        }
+
+        function nextDayBottom() {
+            scrollToBottomAfterLoad = true;
+            nextDay();
+        }
+
+        function goToTodayBottom() {
+            scrollToBottomAfterLoad = true;
+            goToToday();
         }
 
         async function loadDailySummary() {
@@ -1324,13 +1384,20 @@
         }
 
         function loadData() {
-            loadDailySummary();
-            loadWeight();
-            loadCaloricTarget();
-            loadMeals();
-            loadBreakdown();
-            loadExercise();
-            loadProgressPhoto();
+            Promise.all([
+                loadDailySummary(),
+                loadWeight(),
+                loadCaloricTarget(),
+                loadMeals(),
+                loadBreakdown(),
+                loadExercise(),
+                loadProgressPhoto()
+            ]).then(() => {
+                if (scrollToBottomAfterLoad) {
+                    scrollToBottomAfterLoad = false;
+                    document.getElementById('bottom-day-nav').scrollIntoView({block: 'end'});
+                }
+            });
         }
 
         async function loadExercise() {
@@ -1416,6 +1483,8 @@
                     document.getElementById('walking-amount').value = '';
                 } else if (type === 'running') {
                     document.getElementById('running-amount').value = '';
+                } else if (type === 'weightlifting') {
+                    document.getElementById('weightlifting-intensity').value = 'none';
                 }
 
                 loadExercise();
