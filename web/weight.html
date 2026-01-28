@@ -194,6 +194,10 @@
                 <canvas id="macros-chart"></canvas>
             </div>
         </div>
+
+        <div style="text-align: center; margin-top: 10px;">
+            <a href="/items" class="back-btn" style="display: inline-block;">Items Database</a>
+        </div>
     </div>
 
     <script>
@@ -225,6 +229,59 @@
                 console.error('Failed to load calories data:', e);
                 return [];
             }
+        }
+
+        async function loadCaloricTargetData(days) {
+            const url = days === 'all' ? '/api/caloric-target/history' : `/api/caloric-target/history?days=${days}`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                return data.history || [];
+            } catch (e) {
+                console.error('Failed to load caloric target data:', e);
+                return [];
+            }
+        }
+
+        function computeRollingAverage(caloriesData, windowSize = 7) {
+            if (caloriesData.length === 0) return [];
+
+            // Build date-to-calories map
+            const dateMap = {};
+            caloriesData.forEach(d => { dateMap[d.date] = d.calories; });
+
+            // Get sorted dates to determine range
+            const dates = caloriesData.map(d => d.date).sort();
+            const startDate = new Date(dates[0] + 'T12:00:00');
+            const endDate = new Date(dates[dates.length - 1] + 'T12:00:00');
+
+            // Generate complete calendar date range
+            const allDates = [];
+            for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                allDates.push(`${yyyy}-${mm}-${dd}`);
+            }
+
+            // Compute rolling average with sliding window
+            const result = [];
+            let windowSum = 0;
+            for (let i = 0; i < allDates.length; i++) {
+                const cal = dateMap[allDates[i]] || 0;
+                windowSum += cal;
+                if (i >= windowSize) {
+                    windowSum -= (dateMap[allDates[i - windowSize]] || 0);
+                }
+                if (i >= windowSize - 1) {
+                    result.push({
+                        x: new Date(allDates[i] + 'T12:00:00'),
+                        y: Math.round(windowSum / windowSize)
+                    });
+                }
+            }
+            return result;
         }
 
         async function loadMacrosData(days) {
@@ -271,7 +328,7 @@
             document.getElementById('stat-max').textContent = max.toFixed(1);
         }
 
-        function renderChart(weightData, caloriesData) {
+        function renderChart(weightData, caloriesData, targetData) {
             const ctx = document.getElementById('weight-chart').getContext('2d');
             const canvas = document.getElementById('weight-chart');
 
@@ -293,10 +350,51 @@
                 y: d.calories
             }));
 
+            const rollingAvgData = computeRollingAverage(caloriesData);
+
+            // Build step-line data from sparse caloric target change-points
+            // Each target holds until the next change-point
+            let targetChartData = [];
+            if (targetData && targetData.length > 0) {
+                // Determine date range from calories or weight data
+                const allDates = [
+                    ...caloriesData.map(d => d.date),
+                    ...weightData.map(d => d.date)
+                ].sort();
+                const endDate = allDates.length > 0 ? allDates[allDates.length - 1] : targetData[targetData.length - 1].date;
+
+                for (let i = 0; i < targetData.length; i++) {
+                    const point = targetData[i];
+                    // Start of this target
+                    targetChartData.push({
+                        x: new Date(point.date + 'T12:00:00'),
+                        y: point.target_calories
+                    });
+                    // End just before next change-point (or at chart end)
+                    if (i < targetData.length - 1) {
+                        const nextDate = new Date(targetData[i + 1].date + 'T12:00:00');
+                        nextDate.setDate(nextDate.getDate() - 1);
+                        targetChartData.push({
+                            x: nextDate,
+                            y: point.target_calories
+                        });
+                    } else {
+                        // Extend to the end of the chart data
+                        targetChartData.push({
+                            x: new Date(endDate + 'T12:00:00'),
+                            y: point.target_calories
+                        });
+                    }
+                }
+            }
+
             // Calculate calories axis bounds
             const caloriesValues = caloriesData.map(d => d.calories);
-            const minCalories = caloriesValues.length > 0 ? Math.min(...caloriesValues) : 1500;
-            const maxCalories = caloriesValues.length > 0 ? Math.max(...caloriesValues) : 3000;
+            const targetValues = targetData ? targetData.map(d => d.target_calories) : [];
+            const rollingAvgValues = rollingAvgData.map(d => d.y);
+            const allCalValues = [...caloriesValues, ...targetValues, ...rollingAvgValues];
+            const minCalories = allCalValues.length > 0 ? Math.min(...allCalValues) : 1500;
+            const maxCalories = allCalValues.length > 0 ? Math.max(...allCalValues) : 3000;
             const caloriesMin = Math.min(minCalories, 1500);
             const caloriesMax = Math.max(maxCalories, 3000);
 
@@ -304,44 +402,79 @@
                 chart.destroy();
             }
 
+            const datasets = [{
+                label: 'Weight (lbs)',
+                data: weightChartData,
+                borderColor: '#4ecca3',
+                backgroundColor: 'rgba(78, 204, 163, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 4,
+                pointHoverRadius: 8,
+                pointBackgroundColor: '#4ecca3',
+                pointHoverBackgroundColor: '#fff',
+                pointBorderColor: '#4ecca3',
+                pointHoverBorderColor: '#4ecca3',
+                pointBorderWidth: 2,
+                pointHoverBorderWidth: 3,
+                yAxisID: 'y',
+            }, {
+                label: 'Calories',
+                data: caloriesChartData,
+                borderColor: '#ff6b6b',
+                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#ff6b6b',
+                pointHoverBackgroundColor: '#fff',
+                pointBorderColor: '#ff6b6b',
+                pointHoverBorderColor: '#ff6b6b',
+                pointBorderWidth: 2,
+                pointHoverBorderWidth: 3,
+                yAxisID: 'y1',
+            }];
+
+            if (rollingAvgData.length > 0) {
+                datasets.push({
+                    label: '7-Day Avg Calories',
+                    data: rollingAvgData,
+                    borderColor: '#ff9f43',
+                    backgroundColor: 'transparent',
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    pointHoverRadius: 5,
+                    pointBackgroundColor: '#ff9f43',
+                    yAxisID: 'y1',
+                });
+            }
+
+            if (targetChartData.length > 0) {
+                datasets.push({
+                    label: 'Caloric Target',
+                    data: targetChartData,
+                    borderColor: '#ffd93d',
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    borderDash: [6, 4],
+                    fill: false,
+                    stepped: true,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    pointBackgroundColor: '#ffd93d',
+                    yAxisID: 'y1',
+                });
+            }
+
             chart = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    datasets: [{
-                        label: 'Weight (lbs)',
-                        data: weightChartData,
-                        borderColor: '#4ecca3',
-                        backgroundColor: 'rgba(78, 204, 163, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 4,
-                        pointHoverRadius: 8,
-                        pointBackgroundColor: '#4ecca3',
-                        pointHoverBackgroundColor: '#fff',
-                        pointBorderColor: '#4ecca3',
-                        pointHoverBorderColor: '#4ecca3',
-                        pointBorderWidth: 2,
-                        pointHoverBorderWidth: 3,
-                        yAxisID: 'y',
-                    }, {
-                        label: 'Calories',
-                        data: caloriesChartData,
-                        borderColor: '#ff6b6b',
-                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 3,
-                        pointHoverRadius: 6,
-                        pointBackgroundColor: '#ff6b6b',
-                        pointHoverBackgroundColor: '#fff',
-                        pointBorderColor: '#ff6b6b',
-                        pointHoverBorderColor: '#ff6b6b',
-                        pointBorderWidth: 2,
-                        pointHoverBorderWidth: 3,
-                        yAxisID: 'y1',
-                    }]
+                    datasets: datasets
                 },
                 options: {
                     responsive: true,
@@ -387,6 +520,10 @@
                                 label: function(context) {
                                     if (context.dataset.label === 'Weight (lbs)') {
                                         return ' ' + context.parsed.y.toFixed(1) + ' lbs';
+                                    } else if (context.dataset.label === '7-Day Avg Calories') {
+                                        return ' 7d Avg: ' + context.parsed.y + ' kcal';
+                                    } else if (context.dataset.label === 'Caloric Target') {
+                                        return ' Target: ' + context.parsed.y + ' kcal';
                                     } else {
                                         return ' ' + context.parsed.y + ' kcal';
                                     }
@@ -627,12 +764,13 @@
 
         async function updateChart(days) {
             currentDays = days;
-            const [weightData, caloriesData, macrosData] = await Promise.all([
+            const [weightData, caloriesData, macrosData, targetData] = await Promise.all([
                 loadWeightData(days),
                 loadCaloriesData(days),
-                loadMacrosData(days)
+                loadMacrosData(days),
+                loadCaloricTargetData(days)
             ]);
-            renderChart(weightData, caloriesData);
+            renderChart(weightData, caloriesData, targetData);
             renderMacrosChart(macrosData);
             updateStats(weightData);
         }
