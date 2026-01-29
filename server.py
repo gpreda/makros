@@ -468,7 +468,10 @@ Analyze this image and provide a nutritional breakdown.
 IMPORTANT: First determine what type of image this is:
 1. NUTRITION LABEL - If this is a photo of a nutrition facts label, extract the values directly from the label
 2. FOOD PHOTO - If this shows actual food, estimate the nutritional content
-3. NO FOOD - If neither food nor nutrition label is visible, respond with: {{'no_food': true, 'message': 'No food or nutrition label detected'}}
+3. NO FOOD - If neither food nor nutrition label is visible, respond with EXACTLY this format:
+   {{'no_food': true, 'message': 'Description of what is in the image instead'}}
+
+CRITICAL: Your response MUST ALWAYS be a valid Python dictionary. Never respond with plain text or explanations outside of the dictionary format.
 
 FOR NUTRITION LABELS:
 - Read the serving size and use it as the amount
@@ -574,8 +577,16 @@ Return ONLY the dictionary, no other text or markdown.
         )
     except HTTPException:
         raise
-    except (SyntaxError, ValueError) as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
+    except Exception as e:
+        # Log the unparsable response for debugging
+        log_event('meal.analyze.image.parse_error',
+                  ai_used=True,
+                  model_name=model_name,
+                  model_tokens=model_tokens,
+                  model_ms=model_ms,
+                  error=str(e),
+                  raw_response=text)
+        raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {text}")
 
 
 @app.post("/api/meals")
