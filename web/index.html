@@ -619,6 +619,28 @@
             outline: none;
             border-color: #3db892;
         }
+        .name-cell {
+            cursor: pointer;
+        }
+        .name-cell:hover {
+            text-decoration: underline;
+            text-decoration-style: dashed;
+        }
+        .breakdown-name-input {
+            width: 100%;
+            padding: 4px 6px;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #e6e6e6;
+            font-size: inherit;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        .breakdown-name-input:focus {
+            outline: none;
+            border-color: #3db892;
+        }
         .amount-cell {
             white-space: nowrap;
         }
@@ -1300,7 +1322,7 @@
                 const showCopyBtn = !isToday(currentDate);
                 const rows = data.items.map(item => `
                     <tr data-item-id="${item.id}">
-                        <td>${escapeHtml(item.name)}</td>
+                        <td class="name-cell" onclick="editItemName(this, ${item.id})" title="Click to edit">${escapeHtml(item.name)}</td>
                         <td class="amount-cell">
                             <input type="number" class="breakdown-amount" value="${item.amount}"
                                    data-item-id="${item.id}" data-original="${item.amount}"
@@ -1400,6 +1422,44 @@
                 input.value = originalAmount;
                 alert('Failed to update item');
             }
+        }
+
+        function editItemName(td, itemId) {
+            const originalName = td.textContent;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = originalName;
+            input.className = 'breakdown-name-input';
+            td.textContent = '';
+            td.appendChild(input);
+            input.focus();
+            input.select();
+
+            async function save() {
+                const newName = input.value.trim();
+                if (!newName || newName === originalName) {
+                    td.textContent = originalName;
+                    return;
+                }
+                try {
+                    const res = await fetch(`/api/meal-items/${itemId}`, {
+                        method: 'PATCH',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({name: newName})
+                    });
+                    if (!res.ok) throw new Error('Update failed');
+                    td.textContent = newName;
+                } catch (e) {
+                    td.textContent = originalName;
+                    alert('Failed to rename item');
+                }
+            }
+
+            input.addEventListener('blur', save);
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter') input.blur();
+                if (e.key === 'Escape') { input.value = originalName; input.blur(); }
+            });
         }
 
         function loadData() {

@@ -747,119 +747,67 @@ async def delete_meal(meal_id: int):
 
 
 class UpdateMealItemRequest(BaseModel):
-    amount: float
+    amount: Optional[float] = None
+    name: Optional[str] = None
 
 
 @app.patch("/api/meal-items/{item_id}")
 async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
-    """Update a meal item's quantity (recalculates nutrition proportionally)."""
-    if request.amount <= 0:
+    """Update a meal item's quantity and/or name."""
+    if request.amount is not None and request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
+    if request.name is not None and not request.name.strip():
+        raise HTTPException(status_code=400, detail="Name must not be empty")
 
+    storage = get_storage()
     db_start = time.time()
-    updated = get_storage().update_meal_item(item_id, request.amount)
+
+    updated = None
+    if request.amount is not None:
+        updated = storage.update_meal_item(item_id, request.amount)
+    if request.name is not None:
+        updated = storage.rename_meal_item(item_id, request.name.strip())
+
     db_ms = int((time.time() - db_start) * 1000)
     if updated:
-        log_event('meal_item.update', ms=db_ms, item_id=item_id, new_amount=request.amount)
+        log_event('meal_item.update', ms=db_ms, item_id=item_id,
+                  new_amount=request.amount, new_name=request.name)
         return updated
     raise HTTPException(status_code=404, detail="Meal item not found")
 
 
 @app.post("/api/meal-items/{item_id}/copy")
 async def copy_meal_item(item_id: int):
-    """Copy a single meal item to today as a new meal."""
-    item = get_storage().get_meal_item(item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Meal item not found")
-
-    # Create a single-item meal for today
-    items = [{
-        'name': item['name'],
-        'amount': item['amount'],
-        'unit': item['unit'],
-        'calories': item['calories'],
-        'protein': item['protein'],
-        'carbs': item['carbs'],
-        'fat': item['fat'],
-        'fiber': item.get('fiber', 0),
-        'alcohol': item.get('alcohol', 0),
-        'saturated_fat': item.get('saturated_fat', 0),
-        'trans_fat': item.get('trans_fat', 0),
-        'cholesterol': item.get('cholesterol', 0),
-        'sodium': item.get('sodium', 0),
-        'potassium': item.get('potassium', 0),
-        'added_sugar': item.get('added_sugar', 0),
-    }]
-
-    totals = {
-        'calories': item['calories'],
-        'protein': item['protein'],
-        'carbs': item['carbs'],
-        'fat': item['fat'],
-        'fiber': item.get('fiber', 0),
-        'alcohol': item.get('alcohol', 0),
-        'saturated_fat': item.get('saturated_fat', 0),
-        'trans_fat': item.get('trans_fat', 0),
-        'cholesterol': item.get('cholesterol', 0),
-        'sodium': item.get('sodium', 0),
-        'potassium': item.get('potassium', 0),
-        'added_sugar': item.get('added_sugar', 0),
-    }
-
+    """Copy a single meal item to today as a new meal (references same item)."""
     db_start = time.time()
-    new_meal_id = get_storage().log_meal(item['name'], items, totals)
+    new_meal_id = get_storage().copy_item_as_meal(item_id)
     db_ms = int((time.time() - db_start) * 1000)
+
+    if not new_meal_id:
+        raise HTTPException(status_code=404, detail="Meal item not found")
 
     log_event('meal_item.copy',
               ms=db_ms,
               original_item_id=item_id,
-              new_meal_id=new_meal_id,
-              item_name=item['name'],
-              calories=item['calories'])
+              new_meal_id=new_meal_id)
 
     return {"id": new_meal_id, "message": "Item copied as new meal"}
 
 
 @app.post("/api/meals/{meal_id}/copy")
 async def copy_meal(meal_id: int):
-    """Copy a meal to the current day."""
-    meal = get_storage().get_meal_with_items(meal_id)
-    if not meal:
-        raise HTTPException(status_code=404, detail="Meal not found")
-
-    # Prepare items and totals for logging
-    items = [{
-        'name': item['name'],
-        'amount': item['amount'],
-        'unit': item['unit'],
-        'calories': item['calories'],
-        'protein': item['protein'],
-        'carbs': item['carbs'],
-        'fat': item['fat'],
-        'fiber': item.get('fiber', 0),
-        'alcohol': item.get('alcohol', 0),
-    } for item in meal.get('items', [])]
-
-    totals = {
-        'calories': meal['total_calories'],
-        'protein': meal['total_protein'],
-        'carbs': meal['total_carbs'],
-        'fat': meal['total_fat'],
-        'fiber': meal.get('total_fiber', 0),
-        'alcohol': meal.get('total_alcohol', 0),
-    }
-
+    """Copy a meal to the current day (references same items)."""
     db_start = time.time()
-    new_meal_id = get_storage().log_meal(meal['description'], items, totals)
+    new_meal_id = get_storage().copy_meal(meal_id)
     db_ms = int((time.time() - db_start) * 1000)
 
-    # Log the copy event
+    if not new_meal_id:
+        raise HTTPException(status_code=404, detail="Meal not found")
+
     log_event('meal.copy',
               ms=db_ms,
               original_meal_id=meal_id,
-              new_meal_id=new_meal_id,
-              description=meal['description'],
-              calories=totals.get('calories', 0))
+              new_meal_id=new_meal_id)
 
     return {"id": new_meal_id, "message": "Meal copied successfully"}
 
@@ -1020,10 +968,10 @@ async def add_exercise(request: ExerciseRequest, date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    # Get current weight to calculate calories
-    weight = get_storage().get_weight(dt)
+    # Get weight for calorie calculation, falling back to last known weight
+    weight = get_storage().get_latest_weight(dt)
     if not weight:
-        raise HTTPException(status_code=400, detail="Please log your weight first")
+        raise HTTPException(status_code=400, detail="No weight logged yet. Please log your weight first.")
 
     calories = calculate_burnt_calories(
         request.exercise_type, request.amount, request.unit, weight
