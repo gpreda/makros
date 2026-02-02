@@ -619,6 +619,19 @@
             outline: none;
             border-color: #3db892;
         }
+        .breakdown-unit {
+            padding: 4px 2px;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #e6e6e6;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .breakdown-unit:focus {
+            outline: none;
+            border-color: #3db892;
+        }
         .name-cell {
             cursor: pointer;
         }
@@ -1328,7 +1341,12 @@
                             <input type="number" class="breakdown-amount" value="${item.amount}"
                                    data-item-id="${item.id}" data-original="${item.amount}"
                                    min="0.1" step="0.1" onchange="updateBreakdownItem(this)">
-                            <span class="unit">${item.unit}</span>
+                            <select class="breakdown-unit" data-item-id="${item.id}" onchange="updateItemUnit(this)">
+                                <option value="g"${item.unit === 'g' ? ' selected' : ''}>g</option>
+                                <option value="oz"${item.unit === 'oz' ? ' selected' : ''}>oz</option>
+                                <option value="fl_oz"${item.unit === 'fl_oz' ? ' selected' : ''}>fl oz</option>
+                                <option value="item"${item.unit === 'item' ? ' selected' : ''}>item</option>
+                            </select>
                         </td>
                         <td class="cal-cell">${item.calories || 0}</td>
                         <td class="p-cell">${(item.protein || 0).toFixed(1)}</td>
@@ -1461,6 +1479,24 @@
                 if (e.key === 'Enter') input.blur();
                 if (e.key === 'Escape') { input.value = originalName; input.blur(); }
             });
+        }
+
+        async function updateItemUnit(select) {
+            const itemId = select.dataset.itemId;
+            const newUnit = select.value;
+            try {
+                const res = await fetch(`/api/meal-items/${itemId}`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({unit: newUnit})
+                });
+                if (!res.ok) throw new Error('Update failed');
+                // Reload to reflect converted amount
+                loadData();
+            } catch (e) {
+                alert('Failed to update unit');
+                loadData();
+            }
         }
 
         function loadData() {

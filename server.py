@@ -365,7 +365,7 @@ IMPORTANT - Item granularity rules:
 For each item, provide:
 - name: item name (string) - use the product name for branded items
 - amount: numeric quantity (float) - use 1 for single items like burgers
-- unit: one of [{units_list}] - use 'item' for countable products
+- unit: one of [{units_list}] - use 'item' for countable products. IMPORTANT: if the user specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g", "cheese 2 oz"), you MUST use that exact unit and amount
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -489,7 +489,7 @@ FOR FOOD PHOTOS:
 For each item, provide:
 - name: item name (string)
 - amount: numeric quantity (float) - from label serving size or visual estimate
-- unit: one of [{units_list}] - use 'g' or 'serving' as appropriate
+- unit: one of [{units_list}] - use 'g' or 'serving' as appropriate. IMPORTANT: if the user hint specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g"), you MUST use that exact unit and amount
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -749,6 +749,7 @@ async def delete_meal(meal_id: int):
 class UpdateMealItemRequest(BaseModel):
     amount: Optional[float] = None
     name: Optional[str] = None
+    unit: Optional[str] = None
 
 
 @app.patch("/api/meal-items/{item_id}")
@@ -758,6 +759,9 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
         raise HTTPException(status_code=400, detail="Amount must be positive")
     if request.name is not None and not request.name.strip():
         raise HTTPException(status_code=400, detail="Name must not be empty")
+    valid_units = {'g', 'oz', 'fl_oz', 'item'}
+    if request.unit is not None and request.unit not in valid_units:
+        raise HTTPException(status_code=400, detail=f"Unit must be one of: {', '.join(valid_units)}")
 
     storage = get_storage()
     db_start = time.time()
@@ -767,11 +771,14 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
         updated = storage.update_meal_item(item_id, request.amount)
     if request.name is not None:
         updated = storage.rename_meal_item(item_id, request.name.strip())
+    if request.unit is not None:
+        updated = storage.update_meal_item_unit(item_id, request.unit)
 
     db_ms = int((time.time() - db_start) * 1000)
     if updated:
         log_event('meal_item.update', ms=db_ms, item_id=item_id,
-                  new_amount=request.amount, new_name=request.name)
+                  new_amount=request.amount, new_name=request.name,
+                  new_unit=request.unit)
         return updated
     raise HTTPException(status_code=404, detail="Meal item not found")
 

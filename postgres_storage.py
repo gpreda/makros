@@ -752,6 +752,43 @@ class PostgresStorage:
             self.conn.rollback()
             raise
 
+    # Conversion factors to a common base (grams for weight, ml for volume)
+    UNIT_CONVERSIONS = {
+        'g': {'g': 1, 'oz': 1 / 28.3495},
+        'oz': {'oz': 1, 'g': 28.3495},
+        'fl_oz': {'fl_oz': 1},
+        'item': {'item': 1},
+    }
+
+    def update_meal_item_unit(self, item_id: int, new_unit: str) -> Optional[dict]:
+        """Update a meal item's unit, converting the amount where possible."""
+        try:
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
+                item = cur.fetchone()
+                if not item:
+                    return None
+
+                old_unit = item['unit']
+                old_amount = item['amount']
+
+                # Convert amount if a conversion exists, otherwise keep as-is
+                factor = self.UNIT_CONVERSIONS.get(old_unit, {}).get(new_unit)
+                new_amount = round(old_amount * factor, 2) if factor else old_amount
+
+                cur.execute(
+                    "UPDATE meal_items SET unit = %s, amount = %s WHERE id = %s",
+                    (new_unit, new_amount, item_id))
+
+            self.conn.commit()
+            result = dict(item)
+            result['unit'] = new_unit
+            result['amount'] = new_amount
+            return result
+        except Exception as e:
+            self.conn.rollback()
+            raise
+
     def rename_meal_item(self, item_id: int, new_name: str) -> Optional[dict]:
         """Rename a meal item. Returns updated item or None."""
         try:
