@@ -1262,8 +1262,9 @@
                     const imageBtn = meal.has_image
                         ? `<button class="image-btn" onclick="viewMealImage(${meal.id})" title="View photo">&#x1F4F7;</button>`
                         : '';
-                    // Use short name if available, otherwise truncate description
-                    const displayName = meal.name || truncateText(meal.description, 30);
+                    // For single-item meals, always use the item's name (dynamic);
+                    // otherwise use the meal's own name or truncated description
+                    const displayName = meal.single_item_name || meal.name || truncateText(meal.description, 30);
                     const fullDesc = meal.description;
                     const longNameClass = displayName.length > 25 ? ' long-name' : '';
                     return `

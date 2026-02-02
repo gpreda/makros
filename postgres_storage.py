@@ -538,25 +538,33 @@ class PostgresStorage:
                   date: Optional[datetime] = None) -> list[dict]:
         """Get logged meals with pagination, optionally filtered by date."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            single_item_name = """
+                (SELECT MAX(mi.name) FROM meal_items mi
+                 JOIN meal_meal_items mmi ON mi.id = mmi.meal_item_id
+                 WHERE mmi.meal_id = meals.id
+                 HAVING COUNT(*) = 1) as single_item_name
+            """
             if date:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT id, name, description, logged_at,
                            COALESCE(local_logged_at, logged_at) as local_logged_at,
                            total_calories, total_protein,
                            total_carbs, total_fat, total_fiber, total_alcohol,
-                           (image_data IS NOT NULL) as has_image
+                           (image_data IS NOT NULL) as has_image,
+                           {single_item_name}
                     FROM meals
                     WHERE DATE(COALESCE(local_logged_at, logged_at)) = DATE(%s)
                     ORDER BY COALESCE(local_logged_at, logged_at) ASC
                     LIMIT %s OFFSET %s
                 """, (date, limit, offset))
             else:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT id, name, description, logged_at,
                            COALESCE(local_logged_at, logged_at) as local_logged_at,
                            total_calories, total_protein,
                            total_carbs, total_fat, total_fiber, total_alcohol,
-                           (image_data IS NOT NULL) as has_image
+                           (image_data IS NOT NULL) as has_image,
+                           {single_item_name}
                     FROM meals
                     ORDER BY COALESCE(local_logged_at, logged_at) ASC
                     LIMIT %s OFFSET %s
