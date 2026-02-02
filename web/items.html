@@ -617,6 +617,7 @@
                     <td class="nutrition-cell">${(item.fat || 0).toFixed(1)}</td>
                     <td class="nutrition-cell">${(item.fiber || 0).toFixed(1)}</td>
                     <td class="nutrition-cell">${(item.alcohol || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${item.meal_count || 0}</td>
                     <td class="action-cell">
                         <button class="delete-btn" onclick="deleteItem(${item.id}, '${escapeHtml(item.name).replace(/'/g, "\\'")}')" title="Delete item">&times;</button>
                     </td>
@@ -635,6 +636,7 @@
                             <th>Fat</th>
                             <th>Fiber</th>
                             <th>Alcohol</th>
+                            <th>Meals</th>
                             <th></th>
                         </tr>
                     </thead>

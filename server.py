@@ -33,8 +33,7 @@ class AnalyzeResponse(BaseModel):
 
 class LogMealRequest(BaseModel):
     description: str
-    items: list[dict]
-    totals: dict
+    items: list[dict]  # [{item_id, unit, quantity}]
     date: Optional[str] = None  # Browser's local date (YYYY-MM-DD)
     meal_name: Optional[str] = None  # Short name for the meal
     local_time: Optional[str] = None  # Browser's local datetime (ISO format)
@@ -53,6 +52,12 @@ class ItemCreate(BaseModel):
     fat: Optional[float] = None
     fiber: Optional[float] = None
     alcohol: Optional[float] = None
+    saturated_fat: Optional[float] = None
+    trans_fat: Optional[float] = None
+    cholesterol: Optional[float] = None
+    sodium: Optional[float] = None
+    potassium: Optional[float] = None
+    added_sugar: Optional[float] = None
 
 
 class ItemUpdate(BaseModel):
@@ -67,6 +72,12 @@ class ItemUpdate(BaseModel):
     fat: Optional[float] = None
     fiber: Optional[float] = None
     alcohol: Optional[float] = None
+    saturated_fat: Optional[float] = None
+    trans_fat: Optional[float] = None
+    cholesterol: Optional[float] = None
+    sodium: Optional[float] = None
+    potassium: Optional[float] = None
+    added_sugar: Optional[float] = None
 
 
 # Initialize app
@@ -115,7 +126,7 @@ def generate_smart_meal_name(items: list[dict], calorie_threshold: int = 20) -> 
     """Generate a smart meal name from items, listing main ingredients.
 
     Args:
-        items: List of meal items with 'name' and 'calories' keys
+        items: List of meal items. May have 'name' key or need lookup via 'item_id'.
         calorie_threshold: Minimum calories for an item to be included
 
     Returns:
@@ -124,8 +135,27 @@ def generate_smart_meal_name(items: list[dict], calorie_threshold: int = 20) -> 
     if not items:
         return ""
 
+    # Resolve names for items that only have item_id
+    storage = get_storage()
+    resolved_items = []
+    for item in items:
+        name = item.get('name', '').strip()
+        if not name and item.get('item_id'):
+            db_item = storage.get_item_by_id(item['item_id'])
+            if db_item:
+                name = db_item.name
+                calories = (db_item.calories or 0) * item.get('quantity', 1)
+            else:
+                continue
+        else:
+            calories = item.get('calories', 0) or 0
+        resolved_items.append({'name': name, 'calories': calories})
+
+    if not resolved_items:
+        return ""
+
     # Sort by calories descending to prioritize main ingredients
-    sorted_items = sorted(items, key=lambda x: x.get('calories', 0) or 0, reverse=True)
+    sorted_items = sorted(resolved_items, key=lambda x: x.get('calories', 0) or 0, reverse=True)
 
     # Filter out low-calorie items
     main_items = [item for item in sorted_items if (item.get('calories', 0) or 0) >= calorie_threshold]
@@ -197,7 +227,7 @@ async def startup():
 async def shutdown():
     """Close storage on shutdown."""
     if _storage:
-        _get_storage().close()
+        get_storage().close()
 
 
 # Mount static files
@@ -227,7 +257,8 @@ async def items_page():
 def normalize_macros(item_data: dict, amount: float) -> dict:
     """Normalize macros to per-unit values (divide by amount)."""
     if amount == 0:
-        return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0, 'fiber': 0, 'alcohol': 0}
+        return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0, 'fiber': 0, 'alcohol': 0,
+                'saturated_fat': 0, 'trans_fat': 0, 'cholesterol': 0, 'sodium': 0, 'potassium': 0, 'added_sugar': 0}
     return {
         'calories': (item_data.get('calories') or 0) / amount,
         'protein': (item_data.get('protein') or 0) / amount,
@@ -235,6 +266,12 @@ def normalize_macros(item_data: dict, amount: float) -> dict:
         'fat': (item_data.get('fat') or 0) / amount,
         'fiber': (item_data.get('fiber') or 0) / amount,
         'alcohol': (item_data.get('alcohol') or 0) / amount,
+        'saturated_fat': (item_data.get('saturated_fat') or 0) / amount,
+        'trans_fat': (item_data.get('trans_fat') or 0) / amount,
+        'cholesterol': (item_data.get('cholesterol') or 0) / amount,
+        'sodium': (item_data.get('sodium') or 0) / amount,
+        'potassium': (item_data.get('potassium') or 0) / amount,
+        'added_sugar': (item_data.get('added_sugar') or 0) / amount,
     }
 
 
@@ -265,7 +302,8 @@ def find_unique_name(storage, base_name: str) -> str:
 
 
 def process_analyzed_items(items: list[dict]) -> list[dict]:
-    """Process analyzed items: check DB, save new items, handle duplicates."""
+    """Process analyzed items: check DB, save new items, handle duplicates.
+    Returns items with item_id set for each."""
     storage = get_storage()
     processed_items = []
 
@@ -296,7 +334,8 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
             }
 
             if macros_match(new_macros, existing_macros):
-                # Same item, use existing - keep the analyzed data as-is
+                # Same item, use existing
+                item_data['item_id'] = existing_item.id
                 processed_items.append(item_data)
             else:
                 # Different macros, create new item with unique name
@@ -310,14 +349,20 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
                     fat=new_macros['fat'],
                     fiber=new_macros['fiber'],
                     alcohol=new_macros['alcohol'],
+                    saturated_fat=new_macros['saturated_fat'],
+                    trans_fat=new_macros['trans_fat'],
+                    cholesterol=new_macros['cholesterol'],
+                    sodium=new_macros['sodium'],
+                    potassium=new_macros['potassium'],
+                    added_sugar=new_macros['added_sugar'],
                 )
                 try:
                     storage.add_item(new_item)
-                    # Update the item data with new name
                     item_data['name'] = unique_name
+                    item_data['item_id'] = new_item.id
                 except Exception as e:
-                    # If add fails (e.g., race condition), just use original name
                     print(f"Warning: Failed to add item '{unique_name}': {e}")
+                    item_data['item_id'] = existing_item.id
                 processed_items.append(item_data)
         else:
             # New item, add to DB
@@ -330,12 +375,22 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
                 fat=new_macros['fat'],
                 fiber=new_macros['fiber'],
                 alcohol=new_macros['alcohol'],
+                saturated_fat=new_macros['saturated_fat'],
+                trans_fat=new_macros['trans_fat'],
+                cholesterol=new_macros['cholesterol'],
+                sodium=new_macros['sodium'],
+                potassium=new_macros['potassium'],
+                added_sugar=new_macros['added_sugar'],
             )
             try:
                 storage.add_item(new_item)
+                item_data['item_id'] = new_item.id
             except Exception as e:
-                # If add fails (e.g., item was just added), continue anyway
                 print(f"Warning: Failed to add item '{name}': {e}")
+                # Try to get the item that was just added by another request
+                retry_item = storage.get_item_by_name(name)
+                if retry_item:
+                    item_data['item_id'] = retry_item.id
             processed_items.append(item_data)
 
     return processed_items
@@ -613,7 +668,7 @@ async def log_meal_endpoint(request: LogMealRequest):
         meal_name = generate_smart_meal_name(request.items)
 
         db_start = time.time()
-        meal_id = storage.log_meal(request.description, request.items, request.totals,
+        meal_id = storage.log_meal(request.description, request.items,
                                    logged_at=meal_datetime, name=meal_name,
                                    local_logged_at=local_logged_at,
                                    timezone=request.timezone)
@@ -624,11 +679,7 @@ async def log_meal_endpoint(request: LogMealRequest):
                   ms=db_ms,
                   meal_id=meal_id,
                   description=request.description,
-                  item_count=len(request.items),
-                  calories=request.totals.get('calories', 0),
-                  protein=request.totals.get('protein', 0),
-                  carbs=request.totals.get('carbs', 0),
-                  fat=request.totals.get('fat', 0))
+                  item_count=len(request.items))
 
         return {"id": meal_id, "message": "Meal logged successfully"}
     except Exception as e:
@@ -639,8 +690,7 @@ async def log_meal_endpoint(request: LogMealRequest):
 @app.post("/api/meals/with-image")
 async def log_meal_with_image(
     description: str = Form(...),
-    items: str = Form(...),  # JSON string
-    totals: str = Form(...),  # JSON string
+    items: str = Form(...),  # JSON string [{item_id, unit, quantity}]
     date: Optional[str] = Form(None),
     meal_name: Optional[str] = Form(None),
     local_time: Optional[str] = Form(None),
@@ -653,7 +703,6 @@ async def log_meal_with_image(
 
         # Parse JSON strings
         items_list = json.loads(items)
-        totals_dict = json.loads(totals)
 
         # Use browser's date if provided
         meal_datetime = None
@@ -676,7 +725,7 @@ async def log_meal_with_image(
         smart_name = generate_smart_meal_name(items_list)
 
         db_start = time.time()
-        meal_id = storage.log_meal(description, items_list, totals_dict,
+        meal_id = storage.log_meal(description, items_list,
                                    logged_at=meal_datetime, name=smart_name,
                                    image_data=image_data,
                                    local_logged_at=local_logged_at,
@@ -689,11 +738,7 @@ async def log_meal_with_image(
                   meal_id=meal_id,
                   description=description,
                   item_count=len(items_list),
-                  has_image=image_data is not None,
-                  calories=totals_dict.get('calories', 0),
-                  protein=totals_dict.get('protein', 0),
-                  carbs=totals_dict.get('carbs', 0),
-                  fat=totals_dict.get('fat', 0))
+                  has_image=image_data is not None)
 
         return {"id": meal_id, "message": "Meal logged successfully"}
     except json.JSONDecodeError as e:
@@ -748,17 +793,14 @@ async def delete_meal(meal_id: int):
 
 class UpdateMealItemRequest(BaseModel):
     amount: Optional[float] = None
-    name: Optional[str] = None
     unit: Optional[str] = None
 
 
 @app.patch("/api/meal-items/{item_id}")
 async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
-    """Update a meal item's quantity and/or name."""
+    """Update a meal item's quantity and/or unit."""
     if request.amount is not None and request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
-    if request.name is not None and not request.name.strip():
-        raise HTTPException(status_code=400, detail="Name must not be empty")
     valid_units = {'g', 'oz', 'fl_oz', 'item'}
     if request.unit is not None and request.unit not in valid_units:
         raise HTTPException(status_code=400, detail=f"Unit must be one of: {', '.join(valid_units)}")
@@ -769,16 +811,13 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
     updated = None
     if request.amount is not None:
         updated = storage.update_meal_item(item_id, request.amount)
-    if request.name is not None:
-        updated = storage.rename_meal_item(item_id, request.name.strip())
     if request.unit is not None:
         updated = storage.update_meal_item_unit(item_id, request.unit)
 
     db_ms = int((time.time() - db_start) * 1000)
     if updated:
         log_event('meal_item.update', ms=db_ms, item_id=item_id,
-                  new_amount=request.amount, new_name=request.name,
-                  new_unit=request.unit)
+                  new_amount=request.amount, new_unit=request.unit)
         return updated
     raise HTTPException(status_code=404, detail="Meal item not found")
 
@@ -1194,11 +1233,18 @@ async def weight_page():
 @app.get("/api/items")
 async def list_items(limit: int = 100, offset: int = 0, search: Optional[str] = None):
     """List or search items."""
+    storage = get_storage()
     if search:
-        items = get_storage().search_items(search, limit)
+        items = storage.search_items(search, limit)
     else:
-        items = get_storage().list_items(limit, offset)
-    return {"items": [i.to_dict() for i in items], "total": get_storage().count_items()}
+        items = storage.list_items(limit, offset)
+    item_dicts = [i.to_dict() for i in items]
+    # Add meal reference counts
+    item_names = [i.name for i in items]
+    meal_counts = storage.get_item_meal_counts(item_names) if item_names else {}
+    for d in item_dicts:
+        d['meal_count'] = meal_counts.get(d['name'].lower(), 0)
+    return {"items": item_dicts, "total": storage.count_items()}
 
 
 class ItemSuggestRequest(BaseModel):
@@ -1339,6 +1385,12 @@ async def create_item(request: ItemCreate):
         fat=request.fat,
         fiber=request.fiber,
         alcohol=request.alcohol,
+        saturated_fat=request.saturated_fat,
+        trans_fat=request.trans_fat,
+        cholesterol=request.cholesterol,
+        sodium=request.sodium,
+        potassium=request.potassium,
+        added_sugar=request.added_sugar,
     )
     try:
         db_start = time.time()
@@ -1367,6 +1419,25 @@ async def get_item(item_id: int):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     return item.to_dict()
+
+
+class RenameItemRequest(BaseModel):
+    name: str
+
+
+@app.patch("/api/items/{item_id}/name")
+async def rename_item(item_id: int, request: RenameItemRequest):
+    """Rename an item."""
+    new_name = request.name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+    storage = get_storage()
+    item = storage.get_item_by_id(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item.name = new_name
+    storage.update_item(item)
+    return {"name": new_name}
 
 
 @app.put("/api/items/{item_id}")
@@ -1398,6 +1469,18 @@ async def update_item(item_id: int, request: ItemUpdate):
         item.fiber = request.fiber
     if request.alcohol is not None:
         item.alcohol = request.alcohol
+    if request.saturated_fat is not None:
+        item.saturated_fat = request.saturated_fat
+    if request.trans_fat is not None:
+        item.trans_fat = request.trans_fat
+    if request.cholesterol is not None:
+        item.cholesterol = request.cholesterol
+    if request.sodium is not None:
+        item.sodium = request.sodium
+    if request.potassium is not None:
+        item.potassium = request.potassium
+    if request.added_sugar is not None:
+        item.added_sugar = request.added_sugar
 
     get_storage().update_item(item)
     return item.to_dict()

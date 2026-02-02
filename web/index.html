@@ -500,6 +500,47 @@
         .input-row textarea {
             flex: 1;
         }
+        .autocomplete-wrapper {
+            flex: 1;
+            position: relative;
+        }
+        .autocomplete-wrapper textarea {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .autocomplete-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #16213e;
+            border: 1px solid #4ecca3;
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 100;
+        }
+        .autocomplete-dropdown.hidden {
+            display: none;
+        }
+        .autocomplete-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            border-bottom: 1px solid #0f3460;
+        }
+        .autocomplete-item:last-child {
+            border-bottom: none;
+        }
+        .autocomplete-item:hover, .autocomplete-item.active {
+            background: #0f3460;
+        }
+        .autocomplete-item .item-cals {
+            float: right;
+            color: #4ecca3;
+            font-size: 12px;
+        }
         .upload-btn {
             background: #0f3460;
             color: #4ecca3;
@@ -605,6 +646,26 @@
             outline: none;
             border-color: #3db892;
         }
+        .name-cell {
+            cursor: pointer;
+        }
+        .name-cell:hover {
+            color: #4ecca3;
+        }
+        .breakdown-name-input {
+            width: 100%;
+            padding: 4px 6px;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+            background: #0f3460;
+            color: #e6e6e6;
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+        .breakdown-name-input:focus {
+            outline: none;
+            border-color: #3db892;
+        }
         .breakdown-amount {
             width: 50px;
             padding: 4px 6px;
@@ -629,28 +690,6 @@
             cursor: pointer;
         }
         .breakdown-unit:focus {
-            outline: none;
-            border-color: #3db892;
-        }
-        .name-cell {
-            cursor: pointer;
-        }
-        .name-cell:hover {
-            text-decoration: underline;
-            text-decoration-style: dashed;
-        }
-        .breakdown-name-input {
-            width: 100%;
-            padding: 4px 6px;
-            border: 1px solid #4ecca3;
-            border-radius: 4px;
-            background: #0f3460;
-            color: #e6e6e6;
-            font-size: inherit;
-            font-family: inherit;
-            box-sizing: border-box;
-        }
-        .breakdown-name-input:focus {
             outline: none;
             border-color: #3db892;
         }
@@ -859,7 +898,10 @@
         <div class="card" id="analyze-card">
             <h2>Log Meal</h2>
             <div class="input-row">
-                <textarea id="meal-input" placeholder="Describe your meal or add hints for photo, e.g.: 3 eggs, butter beans, one can of sardines"></textarea>
+                <div class="autocomplete-wrapper">
+                    <textarea id="meal-input" placeholder="Describe your meal or add hints for photo, e.g.: 3 eggs, butter beans, one can of sardines"></textarea>
+                    <div id="autocomplete-dropdown" class="autocomplete-dropdown hidden"></div>
+                </div>
                 <label class="upload-btn" title="Upload photo">
                     <input type="file" id="image-input" accept="image/*" onchange="handleImageSelect(event)">
                     &#x1F4F7;
@@ -1336,10 +1378,10 @@
                 const showCopyBtn = !isToday(currentDate);
                 const rows = data.items.map(item => `
                     <tr data-item-id="${item.id}">
-                        <td class="name-cell" onclick="editItemName(this, ${item.id})" title="Click to edit">${escapeHtml(item.name)}</td>
+                        <td class="name-cell" onclick="editItemName(${item.item_id}, this)">${escapeHtml(item.name)}</td>
                         <td class="amount-cell">
-                            <input type="number" class="breakdown-amount" value="${item.amount}"
-                                   data-item-id="${item.id}" data-original="${item.amount}"
+                            <input type="number" class="breakdown-amount" value="${item.quantity}"
+                                   data-item-id="${item.id}" data-original="${item.quantity}"
                                    min="0.1" step="0.1" onchange="updateBreakdownItem(this)">
                             <select class="breakdown-unit" data-item-id="${item.id}" onchange="updateItemUnit(this)">
                                 <option value="g"${item.unit === 'g' ? ' selected' : ''}>g</option>
@@ -1414,6 +1456,50 @@
             }
         }
 
+        async function editItemName(itemId, td) {
+            const currentName = td.textContent.trim();
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentName;
+            input.className = 'breakdown-name-input';
+            td.textContent = '';
+            td.appendChild(input);
+            input.focus();
+            input.select();
+
+            async function save() {
+                const newName = input.value.trim();
+                if (!newName || newName === currentName) {
+                    td.textContent = currentName;
+                    td.onclick = () => editItemName(itemId, td);
+                    return;
+                }
+                try {
+                    const resp = await fetch(`/api/items/${itemId}/name`, {
+                        method: 'PATCH',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({name: newName})
+                    });
+                    if (resp.ok) {
+                        td.textContent = newName;
+                    } else {
+                        const err = await resp.json();
+                        alert(err.detail || 'Failed to rename');
+                        td.textContent = currentName;
+                    }
+                } catch(e) {
+                    td.textContent = currentName;
+                }
+                td.onclick = () => editItemName(itemId, td);
+            }
+
+            input.addEventListener('blur', save);
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { td.textContent = currentName; td.onclick = () => editItemName(itemId, td); }
+            });
+        }
+
         async function updateBreakdownItem(input) {
             const itemId = input.dataset.itemId;
             const originalAmount = parseFloat(input.dataset.original);
@@ -1441,44 +1527,6 @@
                 input.value = originalAmount;
                 alert('Failed to update item');
             }
-        }
-
-        function editItemName(td, itemId) {
-            const originalName = td.textContent;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = originalName;
-            input.className = 'breakdown-name-input';
-            td.textContent = '';
-            td.appendChild(input);
-            input.focus();
-            input.select();
-
-            async function save() {
-                const newName = input.value.trim();
-                if (!newName || newName === originalName) {
-                    td.textContent = originalName;
-                    return;
-                }
-                try {
-                    const res = await fetch(`/api/meal-items/${itemId}`, {
-                        method: 'PATCH',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({name: newName})
-                    });
-                    if (!res.ok) throw new Error('Update failed');
-                    td.textContent = newName;
-                } catch (e) {
-                    td.textContent = originalName;
-                    alert('Failed to rename item');
-                }
-            }
-
-            input.addEventListener('blur', save);
-            input.addEventListener('keydown', e => {
-                if (e.key === 'Enter') input.blur();
-                if (e.key === 'Escape') { input.value = originalName; input.blur(); }
-            });
         }
 
         async function updateItemUnit(select) {
@@ -1729,12 +1777,12 @@
 
                 // Step 2: Log
                 loading.textContent = 'Logging...';
+                const logItems = buildLogItems();
                 let logRes;
                 if (currentImageFile) {
                     const formData = new FormData();
                     formData.append('description', currentDescription);
-                    formData.append('items', JSON.stringify(currentAnalysis.items));
-                    formData.append('totals', JSON.stringify(currentAnalysis.totals));
+                    formData.append('items', JSON.stringify(logItems));
                     formData.append('date', getDateString(currentDate));
                     formData.append('local_time', getLocalTimeISO());
                     formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -1753,8 +1801,7 @@
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
                             description: currentDescription,
-                            items: currentAnalysis.items,
-                            totals: currentAnalysis.totals,
+                            items: logItems,
                             date: getDateString(currentDate),
                             local_time: getLocalTimeISO(),
                             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -1917,6 +1964,15 @@
             }
         }
 
+        function buildLogItems() {
+            // Convert analysis items to the normalized format: [{item_id, unit, quantity}]
+            return currentAnalysis.items.map(item => ({
+                item_id: item.item_id,
+                unit: item.unit,
+                quantity: item.amount
+            }));
+        }
+
         async function logMeal() {
             if (!currentAnalysis) {
                 alert('No meal to log. Please analyze a meal first.');
@@ -1924,13 +1980,12 @@
             }
 
             try {
+                const logItems = buildLogItems();
                 let res;
                 if (currentImageFile) {
-                    // Use multipart form endpoint for meals with images
                     const formData = new FormData();
                     formData.append('description', currentDescription);
-                    formData.append('items', JSON.stringify(currentAnalysis.items));
-                    formData.append('totals', JSON.stringify(currentAnalysis.totals));
+                    formData.append('items', JSON.stringify(logItems));
                     formData.append('date', getDateString(currentDate));
                     formData.append('local_time', getLocalTimeISO());
                     formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -1944,14 +1999,12 @@
                         body: formData
                     });
                 } else {
-                    // Use JSON endpoint for text-only meals
                     res = await fetch('/api/meals', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
                             description: currentDescription,
-                            items: currentAnalysis.items,
-                            totals: currentAnalysis.totals,
+                            items: logItems,
                             date: getDateString(currentDate),
                             local_time: getLocalTimeISO(),
                             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -2135,13 +2188,164 @@
             return text.substring(0, maxLen - 1) + '…';
         }
 
-        // Handle Enter key in textarea
-        document.getElementById('meal-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                analyzeMeal();
+        // Autocomplete for meal input
+        (function() {
+            const input = document.getElementById('meal-input');
+            const dropdown = document.getElementById('autocomplete-dropdown');
+            let debounceTimer = null;
+            let activeIndex = -1;
+
+            function getLastTerm(text) {
+                // Get the last comma-separated term being typed
+                const parts = text.split(',');
+                return parts[parts.length - 1].trim();
             }
-        });
+
+            function replaceLastTerm(text, replacement) {
+                const parts = text.split(',');
+                parts[parts.length - 1] = (parts.length > 1 ? ' ' : '') + replacement;
+                return parts.join(',');
+            }
+
+            async function fetchSuggestions(query) {
+                if (query.length < 2) { hideDropdown(); return; }
+                try {
+                    const res = await fetch(`/api/items?search=${encodeURIComponent(query)}&limit=8`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (data.items.length === 0) { hideDropdown(); return; }
+                    showDropdown(data.items);
+                } catch (e) { hideDropdown(); }
+            }
+
+            let currentSuggestions = [];
+
+            function showDropdown(items) {
+                currentSuggestions = items;
+                activeIndex = -1;
+                dropdown.innerHTML = items.map((item, i) =>
+                    `<div class="autocomplete-item" data-index="${i}">
+                        ${escapeHtml(item.name)}
+                        <span class="item-cals">${item.calories ? Math.round(item.calories) + ' kcal' : ''}</span>
+                    </div>`
+                ).join('');
+                dropdown.classList.remove('hidden');
+
+                dropdown.querySelectorAll('.autocomplete-item').forEach(el => {
+                    el.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        selectItem(parseInt(el.dataset.index));
+                    });
+                });
+            }
+
+            function hideDropdown() {
+                dropdown.classList.add('hidden');
+                activeIndex = -1;
+            }
+
+            function selectItem(index) {
+                const item = currentSuggestions[index];
+                if (!item) return;
+
+                const analysisItem = {
+                    item_id: item.id,
+                    name: item.name,
+                    amount: 1,
+                    unit: item.default_unit || 'serving',
+                    calories: item.calories || 0,
+                    protein: item.protein || 0,
+                    carbs: item.carbs || 0,
+                    fat: item.fat || 0,
+                    fiber: item.fiber || 0,
+                    alcohol: item.alcohol || 0,
+                    saturated_fat: item.saturated_fat || 0,
+                    trans_fat: item.trans_fat || 0,
+                    cholesterol: item.cholesterol || 0,
+                    sodium: item.sodium || 0,
+                    potassium: item.potassium || 0,
+                    added_sugar: item.added_sugar || 0
+                };
+
+                const data = {
+                    meal_name: item.name,
+                    items: [analysisItem],
+                    totals: {
+                        calories: analysisItem.calories,
+                        protein: analysisItem.protein,
+                        carbs: analysisItem.carbs,
+                        fat: analysisItem.fat,
+                        fiber: analysisItem.fiber,
+                        alcohol: analysisItem.alcohol,
+                        saturated_fat: analysisItem.saturated_fat,
+                        trans_fat: analysisItem.trans_fat,
+                        cholesterol: analysisItem.cholesterol,
+                        sodium: analysisItem.sodium,
+                        potassium: analysisItem.potassium,
+                        added_sugar: analysisItem.added_sugar
+                    }
+                };
+
+                currentAnalysis = data;
+                currentDescription = item.name;
+                renderAnalysis(data);
+                document.getElementById('analysis-result').classList.remove('hidden');
+                document.getElementById('analysis-error').classList.add('hidden');
+
+                input.value = '';
+                hideDropdown();
+            }
+
+            function updateActive() {
+                const items = dropdown.querySelectorAll('.autocomplete-item');
+                items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+                if (activeIndex >= 0 && items[activeIndex]) {
+                    items[activeIndex].scrollIntoView({block: 'nearest'});
+                }
+            }
+
+            input.addEventListener('input', () => {
+                clearTimeout(debounceTimer);
+                const term = getLastTerm(input.value);
+                debounceTimer = setTimeout(() => fetchSuggestions(term), 200);
+            });
+
+            input.addEventListener('blur', () => {
+                setTimeout(hideDropdown, 150);
+            });
+
+            input.addEventListener('keydown', (e) => {
+                const items = dropdown.querySelectorAll('.autocomplete-item');
+                const isOpen = !dropdown.classList.contains('hidden');
+
+                if (isOpen && e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    activeIndex = Math.min(activeIndex + 1, items.length - 1);
+                    updateActive();
+                    return;
+                }
+                if (isOpen && e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    activeIndex = Math.max(activeIndex - 1, 0);
+                    updateActive();
+                    return;
+                }
+                if (isOpen && e.key === 'Enter' && activeIndex >= 0) {
+                    e.preventDefault();
+                    selectItem(parseInt(items[activeIndex].dataset.index));
+                    return;
+                }
+                if (isOpen && e.key === 'Escape') {
+                    hideDropdown();
+                    return;
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    hideDropdown();
+                    analyzeMeal();
+                }
+            });
+        })();
 
         document.getElementById('weight-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {

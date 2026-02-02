@@ -58,6 +58,12 @@ class Item:
     fat: Optional[float] = None
     fiber: Optional[float] = None
     alcohol: Optional[float] = None
+    saturated_fat: Optional[float] = None
+    trans_fat: Optional[float] = None
+    cholesterol: Optional[float] = None
+    sodium: Optional[float] = None
+    potassium: Optional[float] = None
+    added_sugar: Optional[float] = None
 
     def convert_to_grams(self, amount: float, unit: str) -> Optional[float]:
         """Convert an amount in the given unit to grams.
@@ -110,6 +116,12 @@ class Item:
             'fat': self.fat,
             'fiber': self.fiber,
             'alcohol': self.alcohol,
+            'saturated_fat': self.saturated_fat,
+            'trans_fat': self.trans_fat,
+            'cholesterol': self.cholesterol,
+            'sodium': self.sodium,
+            'potassium': self.potassium,
+            'added_sugar': self.added_sugar,
         }
 
     def get_nutrition(self, amount: float) -> dict:
@@ -121,6 +133,12 @@ class Item:
             'fat': (self.fat or 0) * amount,
             'fiber': (self.fiber or 0) * amount,
             'alcohol': (self.alcohol or 0) * amount,
+            'saturated_fat': (self.saturated_fat or 0) * amount,
+            'trans_fat': (self.trans_fat or 0) * amount,
+            'cholesterol': (self.cholesterol or 0) * amount,
+            'sodium': (self.sodium or 0) * amount,
+            'potassium': (self.potassium or 0) * amount,
+            'added_sugar': (self.added_sugar or 0) * amount,
         }
 
     @classmethod
@@ -139,4 +157,10 @@ class Item:
             fat=data.get('fat'),
             fiber=data.get('fiber'),
             alcohol=data.get('alcohol'),
+            saturated_fat=data.get('saturated_fat'),
+            trans_fat=data.get('trans_fat'),
+            cholesterol=data.get('cholesterol'),
+            sodium=data.get('sodium'),
+            potassium=data.get('potassium'),
+            added_sugar=data.get('added_sugar'),
         )

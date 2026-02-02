@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
@@ -39,7 +41,7 @@ class PostgresStorage:
         return self._conn
 
     def _init_db(self):
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist and run migrations."""
         with self._conn.cursor() as cur:
             # Items table
             cur.execute("""
@@ -56,6 +58,12 @@ class PostgresStorage:
                     fat REAL,
                     fiber REAL,
                     alcohol REAL,
+                    saturated_fat REAL DEFAULT 0,
+                    trans_fat REAL DEFAULT 0,
+                    cholesterol REAL DEFAULT 0,
+                    sodium REAL DEFAULT 0,
+                    potassium REAL DEFAULT 0,
+                    added_sugar REAL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -78,6 +86,23 @@ class PostgresStorage:
                     END IF;
                 END $$;
             """)
+            # Add extended nutrition columns to items if missing
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'items' AND column_name = 'saturated_fat'
+                    ) THEN
+                        ALTER TABLE items ADD COLUMN saturated_fat REAL DEFAULT 0;
+                        ALTER TABLE items ADD COLUMN trans_fat REAL DEFAULT 0;
+                        ALTER TABLE items ADD COLUMN cholesterol REAL DEFAULT 0;
+                        ALTER TABLE items ADD COLUMN sodium REAL DEFAULT 0;
+                        ALTER TABLE items ADD COLUMN potassium REAL DEFAULT 0;
+                        ALTER TABLE items ADD COLUMN added_sugar REAL DEFAULT 0;
+                    END IF;
+                END $$;
+            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_items_name
                 ON items(LOWER(name))
@@ -87,98 +112,57 @@ class PostgresStorage:
                 ON items(bar_code) WHERE bar_code IS NOT NULL
             """)
 
+            # Add obsolete column to items
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='items' AND column_name='obsolete'
+                    ) THEN
+                        ALTER TABLE items ADD COLUMN obsolete BOOLEAN DEFAULT FALSE;
+                    END IF;
+                END $$;
+            """)
+
             # Meals table (logged meals)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS meals (
                     id SERIAL PRIMARY KEY,
+                    name VARCHAR(100),
                     description TEXT NOT NULL,
+                    image_data BYTEA,
                     logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    total_calories INTEGER,
-                    total_protein REAL,
-                    total_carbs REAL,
-                    total_fat REAL,
-                    total_fiber REAL,
-                    total_alcohol REAL DEFAULT 0
+                    local_logged_at TIMESTAMP,
+                    timezone VARCHAR(50)
                 )
             """)
-            # Add alcohol column if it doesn't exist (migration)
+            # Migrations for meals table columns added over time
+            for col, coldef in [
+                ('total_alcohol', 'REAL DEFAULT 0'),
+                ('name', 'VARCHAR(100)'),
+                ('image_data', 'BYTEA'),
+                ('total_saturated_fat', 'REAL DEFAULT 0'),
+                ('local_logged_at', 'TIMESTAMP'),
+                ('timezone', 'VARCHAR(50)'),
+            ]:
+                cur.execute(f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'meals' AND column_name = '{col}'
+                        ) THEN
+                            ALTER TABLE meals ADD COLUMN {col} {coldef};
+                        END IF;
+                    END $$;
+                """)
+            # Backfill local_logged_at
             cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meals' AND column_name = 'total_alcohol'
-                    ) THEN
-                        ALTER TABLE meals ADD COLUMN total_alcohol REAL DEFAULT 0;
-                    END IF;
-                END $$;
+                UPDATE meals SET local_logged_at = logged_at
+                WHERE local_logged_at IS NULL AND logged_at IS NOT NULL
             """)
-            # Add name column for short meal names (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meals' AND column_name = 'name'
-                    ) THEN
-                        ALTER TABLE meals ADD COLUMN name VARCHAR(100);
-                    END IF;
-                END $$;
-            """)
-            # Add image column for meal photos (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meals' AND column_name = 'image_data'
-                    ) THEN
-                        ALTER TABLE meals ADD COLUMN image_data BYTEA;
-                    END IF;
-                END $$;
-            """)
-            # Add extended nutrition columns to meals (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meals' AND column_name = 'total_saturated_fat'
-                    ) THEN
-                        ALTER TABLE meals ADD COLUMN total_saturated_fat REAL DEFAULT 0;
-                        ALTER TABLE meals ADD COLUMN total_trans_fat REAL DEFAULT 0;
-                        ALTER TABLE meals ADD COLUMN total_cholesterol REAL DEFAULT 0;
-                        ALTER TABLE meals ADD COLUMN total_sodium REAL DEFAULT 0;
-                        ALTER TABLE meals ADD COLUMN total_potassium REAL DEFAULT 0;
-                        ALTER TABLE meals ADD COLUMN total_added_sugar REAL DEFAULT 0;
-                    END IF;
-                END $$;
-            """)
-            # Add local_logged_at column for user's local time (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meals' AND column_name = 'local_logged_at'
-                    ) THEN
-                        ALTER TABLE meals ADD COLUMN local_logged_at TIMESTAMP;
-                        UPDATE meals SET local_logged_at = logged_at WHERE local_logged_at IS NULL;
-                    END IF;
-                END $$;
-            """)
-            # Add timezone column for user's IANA timezone (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meals' AND column_name = 'timezone'
-                    ) THEN
-                        ALTER TABLE meals ADD COLUMN timezone VARCHAR(50);
-                    END IF;
-                END $$;
-            """)
+
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_meals_logged_at
                 ON meals(logged_at)
@@ -188,15 +172,15 @@ class PostgresStorage:
                 ON meals(local_logged_at)
             """)
 
-            # Meal items (ingredients in a meal)
+            # Meal items table (create if not exists with old schema first)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS meal_items (
                     id SERIAL PRIMARY KEY,
                     meal_id INTEGER REFERENCES meals(id) ON DELETE CASCADE,
                     item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
-                    name VARCHAR(255) NOT NULL,
-                    amount REAL NOT NULL,
-                    unit VARCHAR(20) NOT NULL,
+                    name VARCHAR(255),
+                    amount REAL,
+                    unit VARCHAR(20),
                     calories INTEGER,
                     protein REAL,
                     carbs REAL,
@@ -205,41 +189,12 @@ class PostgresStorage:
                     alcohol REAL DEFAULT 0
                 )
             """)
-            # Add alcohol column if it doesn't exist (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meal_items' AND column_name = 'alcohol'
-                    ) THEN
-                        ALTER TABLE meal_items ADD COLUMN alcohol REAL DEFAULT 0;
-                    END IF;
-                END $$;
-            """)
-            # Add extended nutrition columns to meal_items (migration)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'meal_items' AND column_name = 'saturated_fat'
-                    ) THEN
-                        ALTER TABLE meal_items ADD COLUMN saturated_fat REAL DEFAULT 0;
-                        ALTER TABLE meal_items ADD COLUMN trans_fat REAL DEFAULT 0;
-                        ALTER TABLE meal_items ADD COLUMN cholesterol REAL DEFAULT 0;
-                        ALTER TABLE meal_items ADD COLUMN sodium REAL DEFAULT 0;
-                        ALTER TABLE meal_items ADD COLUMN potassium REAL DEFAULT 0;
-                        ALTER TABLE meal_items ADD COLUMN added_sugar REAL DEFAULT 0;
-                    END IF;
-                END $$;
-            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_meal_items_meal_id
                 ON meal_items(meal_id)
             """)
 
-            # Junction table for many-to-many meals <-> meal_items (shared items on copy)
+            # Junction table (create if not exists - needed for migration)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS meal_meal_items (
                     meal_id INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
@@ -247,32 +202,327 @@ class PostgresStorage:
                     PRIMARY KEY (meal_id, meal_item_id)
                 )
             """)
-            # Migrate existing meal_items relationships into junction table
+
+            # === NORMALIZATION MIGRATION ===
+            # Gate: check if meal_items still has the old 'name' column
             cur.execute("""
-                INSERT INTO meal_meal_items (meal_id, meal_item_id)
-                SELECT meal_id, id FROM meal_items WHERE meal_id IS NOT NULL
-                ON CONFLICT DO NOTHING
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'meal_items' AND column_name = 'name'
+                )
             """)
-            # Change CASCADE to SET NULL on meal_items.meal_id FK so deleting
-            # a meal doesn't delete shared items (junction table handles lifecycle)
+            needs_migration = cur.fetchone()[0]
+
+            if needs_migration:
+                print("Running schema normalization migration...")
+
+                # Step 1: Ensure extended nutrition columns on meal_items exist
+                # (needed to read data during migration)
+                for col in ['saturated_fat', 'trans_fat', 'cholesterol', 'sodium', 'potassium', 'added_sugar']:
+                    cur.execute(f"""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name = 'meal_items' AND column_name = '{col}'
+                            ) THEN
+                                ALTER TABLE meal_items ADD COLUMN {col} REAL DEFAULT 0;
+                            END IF;
+                        END $$;
+                    """)
+
+                # Step 2: Backfill items from orphaned meal_items (item_id IS NULL)
+                # Also ensure item_id column exists
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'meal_items' AND column_name = 'item_id'
+                        ) THEN
+                            ALTER TABLE meal_items ADD COLUMN item_id INTEGER REFERENCES items(id) ON DELETE SET NULL;
+                        END IF;
+                    END $$;
+                """)
+
+                # For each meal_item without an item_id, find or create matching item
+                # and adjust quantity to preserve original calorie totals
+                cur.execute("""
+                    SELECT mi.id, mi.name, mi.unit, mi.amount,
+                           mi.calories, mi.protein, mi.carbs, mi.fat, mi.fiber, mi.alcohol,
+                           mi.saturated_fat, mi.trans_fat, mi.cholesterol,
+                           mi.sodium, mi.potassium, mi.added_sugar
+                    FROM meal_items mi
+                    WHERE mi.item_id IS NULL AND mi.name IS NOT NULL
+                          AND (mi.obsolete IS NULL OR mi.obsolete = false)
+                """)
+                orphaned_rows = cur.fetchall()
+
+                # Cache created items to avoid repeated lookups
+                item_cache = {}  # name_lower -> (item_id, item_calories)
+
+                for row in orphaned_rows:
+                    mi_id = row[0]
+                    mi_name = row[1]
+                    mi_unit = row[2]
+                    mi_amount = row[3] or 1
+                    mi_cal = row[4] or 0
+                    mi_pro, mi_carb, mi_fat, mi_fiber, mi_alc = (row[5] or 0), (row[6] or 0), (row[7] or 0), (row[8] or 0), (row[9] or 0)
+                    mi_satf, mi_transf, mi_chol, mi_sod, mi_pot, mi_addsug = (row[10] or 0), (row[11] or 0), (row[12] or 0), (row[13] or 0), (row[14] or 0), (row[15] or 0)
+
+                    name_lower = mi_name.lower()
+
+                    if name_lower in item_cache:
+                        item_id, item_cal = item_cache[name_lower]
+                    else:
+                        # Check if item exists by name
+                        cur.execute(
+                            "SELECT id, calories FROM items WHERE LOWER(name) = LOWER(%s)",
+                            (mi_name,))
+                        existing = cur.fetchone()
+                        if existing:
+                            item_id = existing[0]
+                            item_cal = existing[1] or 0
+                        else:
+                            # Normalize to per-1-unit and create new item
+                            if mi_amount and mi_amount != 0:
+                                per_cal = mi_cal / mi_amount
+                                per_pro = mi_pro / mi_amount
+                                per_carb = mi_carb / mi_amount
+                                per_fat = mi_fat / mi_amount
+                                per_fiber = mi_fiber / mi_amount
+                                per_alc = mi_alc / mi_amount
+                                per_satf = mi_satf / mi_amount
+                                per_transf = mi_transf / mi_amount
+                                per_chol = mi_chol / mi_amount
+                                per_sod = mi_sod / mi_amount
+                                per_pot = mi_pot / mi_amount
+                                per_addsug = mi_addsug / mi_amount
+                            else:
+                                per_cal = per_pro = per_carb = per_fat = per_fiber = per_alc = 0
+                                per_satf = per_transf = per_chol = per_sod = per_pot = per_addsug = 0
+
+                            cur.execute("""
+                                INSERT INTO items (name, default_unit, calories, protein, carbs, fat, fiber, alcohol,
+                                                   saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                RETURNING id
+                            """, (mi_name, mi_unit or 'item', per_cal, per_pro, per_carb, per_fat, per_fiber, per_alc,
+                                  per_satf, per_transf, per_chol, per_sod, per_pot, per_addsug))
+                            item_id = cur.fetchone()[0]
+                            item_cal = per_cal
+
+                        item_cache[name_lower] = (item_id, item_cal)
+
+                    # Compute correct quantity to preserve original calorie total
+                    # If item has per-unit calories, derive quantity from original total
+                    if item_cal and item_cal > 0 and mi_cal > 0:
+                        new_quantity = mi_cal / item_cal
+                    else:
+                        new_quantity = mi_amount
+
+                    cur.execute(
+                        "UPDATE meal_items SET item_id = %s, amount = %s WHERE id = %s",
+                        (item_id, new_quantity, mi_id))
+
+                # Step 3: Sync meal_ids from junction table
+                # The junction table is the authoritative source for meal→meal_item mapping.
+                # meal_items can be shared across meals (from copy_meal), so we need to
+                # duplicate rows for items that appear in multiple meals.
+                # Also delete obsolete meal_items before syncing.
+                cur.execute("""
+                    DELETE FROM meal_items
+                    WHERE obsolete = true OR (item_id IS NULL AND name IS NOT NULL
+                          AND (SELECT COUNT(*) FROM meal_meal_items mmi WHERE mmi.meal_item_id = meal_items.id) = 0)
+                """)
+
+                cur.execute("""
+                    SELECT mmi.meal_id, mmi.meal_item_id
+                    FROM meal_meal_items mmi
+                    JOIN meal_items mi ON mi.id = mmi.meal_item_id
+                    WHERE mi.item_id IS NOT NULL
+                    ORDER BY mmi.meal_item_id, mmi.meal_id
+                """)
+                junction_rows = cur.fetchall()
+
+                # Group by meal_item_id to find shared items
+
+                item_meals = defaultdict(list)
+                for meal_id, mi_id in junction_rows:
+                    item_meals[mi_id].append(meal_id)
+
+                for mi_id, meal_ids in item_meals.items():
+                    # First meal: set meal_id on existing row
+                    cur.execute(
+                        "UPDATE meal_items SET meal_id = %s WHERE id = %s",
+                        (meal_ids[0], mi_id))
+
+                    # Additional meals: duplicate the meal_item row
+                    # Include name column since it hasn't been dropped yet at this step
+                    for extra_meal_id in meal_ids[1:]:
+                        cur.execute("""
+                            INSERT INTO meal_items (meal_id, item_id, name, amount, unit,
+                                calories, protein, carbs, fat, fiber, alcohol,
+                                saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar)
+                            SELECT %s, item_id, name, amount, unit,
+                                calories, protein, carbs, fat, fiber, alcohol,
+                                saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar
+                            FROM meal_items WHERE id = %s
+                        """, (extra_meal_id, mi_id))
+
+                # Step 4: Restructure meal_items
+                # Rename amount -> quantity
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'meal_items' AND column_name = 'amount'
+                        ) THEN
+                            ALTER TABLE meal_items RENAME COLUMN amount TO quantity;
+                        END IF;
+                    END $$;
+                """)
+
+                # Delete meal_items with no meal_id or no item_id (orphans that can't be migrated)
+                cur.execute("DELETE FROM meal_items WHERE meal_id IS NULL OR item_id IS NULL")
+
+                # Drop old FK constraints and make item_id NOT NULL, meal_id NOT NULL with CASCADE
+                # First drop old constraints
+                cur.execute("""
+                    DO $$
+                    DECLARE r RECORD;
+                    BEGIN
+                        FOR r IN (
+                            SELECT constraint_name FROM information_schema.table_constraints
+                            WHERE table_name = 'meal_items' AND constraint_type = 'FOREIGN KEY'
+                        ) LOOP
+                            EXECUTE 'ALTER TABLE meal_items DROP CONSTRAINT ' || r.constraint_name;
+                        END LOOP;
+                    END $$;
+                """)
+
+                # Set NOT NULL
+                cur.execute("ALTER TABLE meal_items ALTER COLUMN item_id SET NOT NULL")
+                cur.execute("ALTER TABLE meal_items ALTER COLUMN meal_id SET NOT NULL")
+
+                # Add new FK constraints
+                cur.execute("""
+                    ALTER TABLE meal_items
+                    ADD CONSTRAINT meal_items_meal_id_fkey
+                    FOREIGN KEY (meal_id) REFERENCES meals(id) ON DELETE CASCADE
+                """)
+                cur.execute("""
+                    ALTER TABLE meal_items
+                    ADD CONSTRAINT meal_items_item_id_fkey
+                    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE RESTRICT
+                """)
+
+                # Drop macro columns and name from meal_items
+                for col in ['name', 'calories', 'protein', 'carbs', 'fat', 'fiber', 'alcohol',
+                            'saturated_fat', 'trans_fat', 'cholesterol', 'sodium', 'potassium', 'added_sugar',
+                            'obsolete']:
+                    cur.execute(f"""
+                        DO $$
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name = 'meal_items' AND column_name = '{col}'
+                            ) THEN
+                                ALTER TABLE meal_items DROP COLUMN {col};
+                            END IF;
+                        END $$;
+                    """)
+
+                # Step 5: Drop meal_meal_items
+                cur.execute("DROP TABLE IF EXISTS meal_meal_items")
+
+                # Step 6: Drop total_* columns from meals
+                for col in ['total_calories', 'total_protein', 'total_carbs', 'total_fat',
+                            'total_fiber', 'total_alcohol', 'total_saturated_fat', 'total_trans_fat',
+                            'total_cholesterol', 'total_sodium', 'total_potassium', 'total_added_sugar']:
+                    cur.execute(f"""
+                        DO $$
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name = 'meals' AND column_name = '{col}'
+                            ) THEN
+                                ALTER TABLE meals DROP COLUMN {col};
+                            END IF;
+                        END $$;
+                    """)
+
+                # Add index on meal_items.item_id
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_items_item_id ON meal_items(item_id)")
+
+                print("Schema normalization migration complete.")
+
+            # === POST-MIGRATION REPAIR ===
+            # Fix orphaned meals (meals with no meal_items) that lost items
+            # during a previous buggy migration run. Also drop obsolete column
+            # from items if present.
+            cur.execute("""
+                SELECT m.id, m.name, m.description
+                FROM meals m
+                LEFT JOIN meal_items mi ON mi.meal_id = m.id
+                WHERE mi.id IS NULL
+            """)
+            orphaned_meals = cur.fetchall()
+
+            if orphaned_meals:
+
+                print(f"Repairing {len(orphaned_meals)} orphaned meal(s)...")
+                for meal_row in orphaned_meals:
+                    meal_id, meal_name, meal_desc = meal_row[0], meal_row[1], meal_row[2]
+                    # Try to find a matching item by name variants
+                    search_names = []
+                    for name in [meal_name, meal_desc]:
+                        if name:
+                            search_names.append(name)
+                            # Strip trailing " #N" suffix
+                            stripped = re.sub(r'\s*#\d+$', '', name)
+                            if stripped != name:
+                                search_names.append(stripped)
+
+                    item_id = None
+                    for search_name in search_names:
+                        cur.execute(
+                            "SELECT id FROM items WHERE LOWER(name) = LOWER(%s)",
+                            (search_name,))
+                        result = cur.fetchone()
+                        if result:
+                            item_id = result[0]
+                            break
+
+                    if item_id:
+                        cur.execute(
+                            "SELECT default_unit FROM items WHERE id = %s",
+                            (item_id,))
+                        default_unit = cur.fetchone()[0] or 'item'
+                        cur.execute("""
+                            INSERT INTO meal_items (meal_id, item_id, quantity, unit)
+                            VALUES (%s, %s, 1, %s)
+                        """, (meal_id, item_id, default_unit))
+                        print(f"  Repaired meal {meal_id} ({meal_name}) -> item {item_id}")
+                    else:
+                        print(f"  WARNING: No matching item found for meal {meal_id} ({meal_name})")
+
+                self._conn.commit()
+
+            # Drop obsolete column from items if present
             cur.execute("""
                 DO $$
                 BEGIN
                     IF EXISTS (
-                        SELECT 1 FROM information_schema.referential_constraints rc
-                        JOIN information_schema.key_column_usage kcu
-                            ON rc.constraint_name = kcu.constraint_name
-                            AND rc.constraint_schema = kcu.constraint_schema
-                        WHERE kcu.table_name = 'meal_items' AND kcu.column_name = 'meal_id'
-                        AND rc.delete_rule = 'CASCADE'
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'items' AND column_name = 'obsolete'
                     ) THEN
-                        ALTER TABLE meal_items DROP CONSTRAINT meal_items_meal_id_fkey;
-                        ALTER TABLE meal_items ALTER COLUMN meal_id DROP NOT NULL;
-                        ALTER TABLE meal_items ADD CONSTRAINT meal_items_meal_id_fkey
-                            FOREIGN KEY (meal_id) REFERENCES meals(id) ON DELETE SET NULL;
+                        ALTER TABLE items DROP COLUMN obsolete;
                     END IF;
                 END $$;
             """)
+            self._conn.commit()
 
             # Daily weights table
             cur.execute("""
@@ -350,13 +600,16 @@ class PostgresStorage:
             with self.conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO items (bar_code, name, description, unit_conversions,
-                                       default_unit, calories, protein, carbs, fat, fiber, alcohol)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       default_unit, calories, protein, carbs, fat, fiber, alcohol,
+                                       saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (item.bar_code, item.name, item.description,
                       json.dumps(item.unit_conversions), item.default_unit,
                       item.calories, item.protein, item.carbs, item.fat,
-                      item.fiber, item.alcohol))
+                      item.fiber, item.alcohol,
+                      item.saturated_fat, item.trans_fat, item.cholesterol,
+                      item.sodium, item.potassium, item.added_sugar))
                 item.id = cur.fetchone()[0]
             self.conn.commit()
             return item
@@ -405,12 +658,17 @@ class PostgresStorage:
                     unit_conversions = %s, default_unit = %s,
                     calories = %s, protein = %s, carbs = %s,
                     fat = %s, fiber = %s, alcohol = %s,
+                    saturated_fat = %s, trans_fat = %s, cholesterol = %s,
+                    sodium = %s, potassium = %s, added_sugar = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (item.bar_code, item.name, item.description,
                   json.dumps(item.unit_conversions), item.default_unit,
                   item.calories, item.protein, item.carbs, item.fat,
-                  item.fiber, item.alcohol, item.id))
+                  item.fiber, item.alcohol,
+                  item.saturated_fat, item.trans_fat, item.cholesterol,
+                  item.sodium, item.potassium, item.added_sugar,
+                  item.id))
             updated = cur.rowcount > 0
         self.conn.commit()
         return updated
@@ -448,6 +706,20 @@ class PostgresStorage:
             cur.execute("SELECT COUNT(*) FROM items")
             return cur.fetchone()[0]
 
+    def get_item_meal_counts(self, item_names: list[str]) -> dict[str, int]:
+        """Get the number of meals referencing each item name (via meal_items)."""
+        if not item_names:
+            return {}
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT LOWER(i.name) as lname, COUNT(DISTINCT mi.meal_id) as meal_count
+                FROM meal_items mi
+                JOIN items i ON mi.item_id = i.id
+                WHERE LOWER(i.name) = ANY(%s)
+                GROUP BY LOWER(i.name)
+            """, ([n.lower() for n in item_names],))
+            return {row['lname']: row['meal_count'] for row in cur.fetchall()}
+
     def _row_to_item(self, row: dict) -> Item:
         """Convert database row to Item object."""
         return Item(
@@ -463,70 +735,48 @@ class PostgresStorage:
             fat=row.get('fat'),
             fiber=row.get('fiber'),
             alcohol=row.get('alcohol'),
+            saturated_fat=row.get('saturated_fat'),
+            trans_fat=row.get('trans_fat'),
+            cholesterol=row.get('cholesterol'),
+            sodium=row.get('sodium'),
+            potassium=row.get('potassium'),
+            added_sugar=row.get('added_sugar'),
         )
 
     # Meal operations
-    def log_meal(self, description: str, items: list[dict], totals: dict,
+    def log_meal(self, description: str, items: list[dict],
                  logged_at: Optional[datetime] = None, name: Optional[str] = None,
                  image_data: Optional[bytes] = None,
                  local_logged_at: Optional[datetime] = None,
                  timezone: Optional[str] = None) -> int:
-        """Log a meal with its items. Returns meal id."""
+        """Log a meal with its items. Items are [{item_id, unit, quantity}].
+        Returns meal id."""
         try:
             with self.conn.cursor() as cur:
-                # Insert meal with explicit timestamp if provided
                 if logged_at:
                     cur.execute("""
-                        INSERT INTO meals (name, description, total_calories, total_protein,
-                                           total_carbs, total_fat, total_fiber, total_alcohol,
-                                           total_saturated_fat, total_trans_fat, total_cholesterol,
-                                           total_sodium, total_potassium, total_added_sugar,
-                                           logged_at, image_data, local_logged_at, timezone)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO meals (name, description, logged_at, image_data,
+                                           local_logged_at, timezone)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         RETURNING id
-                    """, (name, description, totals.get('calories'), totals.get('protein'),
-                          totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                          totals.get('alcohol', 0), totals.get('saturated_fat', 0),
-                          totals.get('trans_fat', 0), totals.get('cholesterol', 0),
-                          totals.get('sodium', 0), totals.get('potassium', 0),
-                          totals.get('added_sugar', 0), logged_at, image_data, local_logged_at, timezone))
+                    """, (name, description, logged_at, image_data,
+                          local_logged_at, timezone))
                 else:
                     cur.execute("""
-                        INSERT INTO meals (name, description, total_calories, total_protein,
-                                           total_carbs, total_fat, total_fiber, total_alcohol,
-                                           total_saturated_fat, total_trans_fat, total_cholesterol,
-                                           total_sodium, total_potassium, total_added_sugar,
-                                           image_data, local_logged_at, timezone)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO meals (name, description, image_data,
+                                           local_logged_at, timezone)
+                        VALUES (%s, %s, %s, %s, %s)
                         RETURNING id
-                    """, (name, description, totals.get('calories'), totals.get('protein'),
-                          totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
-                          totals.get('alcohol', 0), totals.get('saturated_fat', 0),
-                          totals.get('trans_fat', 0), totals.get('cholesterol', 0),
-                          totals.get('sodium', 0), totals.get('potassium', 0),
-                          totals.get('added_sugar', 0), image_data, local_logged_at, timezone))
+                    """, (name, description, image_data,
+                          local_logged_at, timezone))
                 meal_id = cur.fetchone()[0]
 
-                # Insert meal items
                 for item in items:
                     cur.execute("""
-                        INSERT INTO meal_items (meal_id, name, amount, unit,
-                                               calories, protein, carbs, fat, fiber, alcohol,
-                                               saturated_fat, trans_fat, cholesterol,
-                                               sodium, potassium, added_sugar)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                    """, (meal_id, item.get('name'), item.get('amount'),
-                          item.get('unit'), item.get('calories'),
-                          item.get('protein'), item.get('carbs'),
-                          item.get('fat'), item.get('fiber'), item.get('alcohol', 0),
-                          item.get('saturated_fat', 0), item.get('trans_fat', 0),
-                          item.get('cholesterol', 0), item.get('sodium', 0),
-                          item.get('potassium', 0), item.get('added_sugar', 0)))
-                    meal_item_id = cur.fetchone()[0]
-                    cur.execute("""
-                        INSERT INTO meal_meal_items (meal_id, meal_item_id) VALUES (%s, %s)
-                    """, (meal_id, meal_item_id))
+                        INSERT INTO meal_items (meal_id, item_id, unit, quantity)
+                        VALUES (%s, %s, %s, %s)
+                    """, (meal_id, item['item_id'], item.get('unit', 'item'),
+                          item.get('quantity', 1)))
 
             self.conn.commit()
             return meal_id
@@ -534,39 +784,62 @@ class PostgresStorage:
             self.conn.rollback()
             raise
 
+    # SQL fragment for computing nutrition from meal_items -> items
+    _NUTRITION_SUM = """
+        COALESCE(SUM(i.calories * mi.quantity), 0) as total_calories,
+        COALESCE(SUM(i.protein * mi.quantity), 0) as total_protein,
+        COALESCE(SUM(i.carbs * mi.quantity), 0) as total_carbs,
+        COALESCE(SUM(i.fat * mi.quantity), 0) as total_fat,
+        COALESCE(SUM(i.fiber * mi.quantity), 0) as total_fiber,
+        COALESCE(SUM(i.alcohol * mi.quantity), 0) as total_alcohol,
+        COALESCE(SUM(i.saturated_fat * mi.quantity), 0) as total_saturated_fat,
+        COALESCE(SUM(i.trans_fat * mi.quantity), 0) as total_trans_fat,
+        COALESCE(SUM(i.cholesterol * mi.quantity), 0) as total_cholesterol,
+        COALESCE(SUM(i.sodium * mi.quantity), 0) as total_sodium,
+        COALESCE(SUM(i.potassium * mi.quantity), 0) as total_potassium,
+        COALESCE(SUM(i.added_sugar * mi.quantity), 0) as total_added_sugar
+    """
+
     def get_meals(self, limit: int = 50, offset: int = 0,
                   date: Optional[datetime] = None) -> list[dict]:
         """Get logged meals with pagination, optionally filtered by date."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            single_item_name = """
-                (SELECT MAX(mi.name) FROM meal_items mi
-                 JOIN meal_meal_items mmi ON mi.id = mmi.meal_item_id
-                 WHERE mmi.meal_id = meals.id
-                 HAVING COUNT(*) = 1) as single_item_name
+            # Subquery to compute totals per meal
+            nutrition_sub = f"""
+                LEFT JOIN LATERAL (
+                    SELECT
+                        {self._NUTRITION_SUM},
+                        CASE WHEN COUNT(*) = 1 THEN MAX(i.name) ELSE NULL END as single_item_name
+                    FROM meal_items mi
+                    JOIN items i ON mi.item_id = i.id
+                    WHERE mi.meal_id = m.id
+                ) n ON TRUE
             """
             if date:
                 cur.execute(f"""
-                    SELECT id, name, description, logged_at,
-                           COALESCE(local_logged_at, logged_at) as local_logged_at,
-                           total_calories, total_protein,
-                           total_carbs, total_fat, total_fiber, total_alcohol,
-                           (image_data IS NOT NULL) as has_image,
-                           {single_item_name}
-                    FROM meals
-                    WHERE DATE(COALESCE(local_logged_at, logged_at)) = DATE(%s)
-                    ORDER BY COALESCE(local_logged_at, logged_at) ASC
+                    SELECT m.id, m.name, m.description, m.logged_at,
+                           COALESCE(m.local_logged_at, m.logged_at) as local_logged_at,
+                           n.total_calories, n.total_protein, n.total_carbs,
+                           n.total_fat, n.total_fiber, n.total_alcohol,
+                           (m.image_data IS NOT NULL) as has_image,
+                           n.single_item_name
+                    FROM meals m
+                    {nutrition_sub}
+                    WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
+                    ORDER BY COALESCE(m.local_logged_at, m.logged_at) ASC
                     LIMIT %s OFFSET %s
                 """, (date, limit, offset))
             else:
                 cur.execute(f"""
-                    SELECT id, name, description, logged_at,
-                           COALESCE(local_logged_at, logged_at) as local_logged_at,
-                           total_calories, total_protein,
-                           total_carbs, total_fat, total_fiber, total_alcohol,
-                           (image_data IS NOT NULL) as has_image,
-                           {single_item_name}
-                    FROM meals
-                    ORDER BY COALESCE(local_logged_at, logged_at) ASC
+                    SELECT m.id, m.name, m.description, m.logged_at,
+                           COALESCE(m.local_logged_at, m.logged_at) as local_logged_at,
+                           n.total_calories, n.total_protein, n.total_carbs,
+                           n.total_fat, n.total_fiber, n.total_alcohol,
+                           (m.image_data IS NOT NULL) as has_image,
+                           n.single_item_name
+                    FROM meals m
+                    {nutrition_sub}
+                    ORDER BY COALESCE(m.local_logged_at, m.logged_at) ASC
                     LIMIT %s OFFSET %s
                 """, (limit, offset))
             return [dict(row) for row in cur.fetchall()]
@@ -581,7 +854,7 @@ class PostgresStorage:
         return None
 
     def get_meal_with_items(self, meal_id: int) -> Optional[dict]:
-        """Get a meal with all its items."""
+        """Get a meal with all its items (computed macros per item)."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT * FROM meals WHERE id = %s", (meal_id,))
             meal = cur.fetchone()
@@ -589,9 +862,23 @@ class PostgresStorage:
                 return None
 
             cur.execute("""
-                SELECT mi.* FROM meal_items mi
-                JOIN meal_meal_items mmi ON mi.id = mmi.meal_item_id
-                WHERE mmi.meal_id = %s ORDER BY mi.id
+                SELECT mi.id, mi.meal_id, mi.item_id, mi.unit, mi.quantity,
+                       i.name,
+                       COALESCE(i.calories, 0) * mi.quantity as calories,
+                       COALESCE(i.protein, 0) * mi.quantity as protein,
+                       COALESCE(i.carbs, 0) * mi.quantity as carbs,
+                       COALESCE(i.fat, 0) * mi.quantity as fat,
+                       COALESCE(i.fiber, 0) * mi.quantity as fiber,
+                       COALESCE(i.alcohol, 0) * mi.quantity as alcohol,
+                       COALESCE(i.saturated_fat, 0) * mi.quantity as saturated_fat,
+                       COALESCE(i.trans_fat, 0) * mi.quantity as trans_fat,
+                       COALESCE(i.cholesterol, 0) * mi.quantity as cholesterol,
+                       COALESCE(i.sodium, 0) * mi.quantity as sodium,
+                       COALESCE(i.potassium, 0) * mi.quantity as potassium,
+                       COALESCE(i.added_sugar, 0) * mi.quantity as added_sugar
+                FROM meal_items mi
+                JOIN items i ON mi.item_id = i.id
+                WHERE mi.meal_id = %s ORDER BY mi.id
             """, (meal_id,))
             items = [dict(row) for row in cur.fetchall()]
 
@@ -603,151 +890,92 @@ class PostgresStorage:
             date = datetime.now()
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT
-                    COALESCE(SUM(total_calories), 0) as calories,
-                    COALESCE(SUM(total_protein), 0) as protein,
-                    COALESCE(SUM(total_carbs), 0) as carbs,
-                    COALESCE(SUM(total_fat), 0) as fat,
-                    COALESCE(SUM(total_fiber), 0) as fiber,
-                    COALESCE(SUM(total_alcohol), 0) as alcohol,
-                    COALESCE(SUM(total_saturated_fat), 0) as saturated_fat,
-                    COALESCE(SUM(total_trans_fat), 0) as trans_fat,
-                    COALESCE(SUM(total_cholesterol), 0) as cholesterol,
-                    COALESCE(SUM(total_sodium), 0) as sodium,
-                    COALESCE(SUM(total_potassium), 0) as potassium,
-                    COALESCE(SUM(total_added_sugar), 0) as added_sugar,
-                    COUNT(*) as meal_count
-                FROM meals
-                WHERE DATE(COALESCE(local_logged_at, logged_at)) = DATE(%s)
+                    COALESCE(SUM(COALESCE(i.calories, 0) * mi.quantity), 0) as calories,
+                    COALESCE(SUM(COALESCE(i.protein, 0) * mi.quantity), 0) as protein,
+                    COALESCE(SUM(COALESCE(i.carbs, 0) * mi.quantity), 0) as carbs,
+                    COALESCE(SUM(COALESCE(i.fat, 0) * mi.quantity), 0) as fat,
+                    COALESCE(SUM(COALESCE(i.fiber, 0) * mi.quantity), 0) as fiber,
+                    COALESCE(SUM(COALESCE(i.alcohol, 0) * mi.quantity), 0) as alcohol,
+                    COALESCE(SUM(COALESCE(i.saturated_fat, 0) * mi.quantity), 0) as saturated_fat,
+                    COALESCE(SUM(COALESCE(i.trans_fat, 0) * mi.quantity), 0) as trans_fat,
+                    COALESCE(SUM(COALESCE(i.cholesterol, 0) * mi.quantity), 0) as cholesterol,
+                    COALESCE(SUM(COALESCE(i.sodium, 0) * mi.quantity), 0) as sodium,
+                    COALESCE(SUM(COALESCE(i.potassium, 0) * mi.quantity), 0) as potassium,
+                    COALESCE(SUM(COALESCE(i.added_sugar, 0) * mi.quantity), 0) as added_sugar,
+                    COUNT(DISTINCT m.id) as meal_count
+                FROM meals m
+                LEFT JOIN meal_items mi ON mi.meal_id = m.id
+                LEFT JOIN items i ON mi.item_id = i.id
+                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
             """, (date,))
             return dict(cur.fetchone())
 
     def get_daily_breakdown(self, date: Optional[datetime] = None) -> list[dict]:
-        """Get all meal items for a specific day."""
+        """Get all meal items for a specific day with computed macros."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT mi.id, mmi.meal_id, mi.name, mi.amount, mi.unit, mi.calories,
-                       mi.protein, mi.carbs, mi.fat, mi.fiber, mi.alcohol,
-                       mi.saturated_fat, mi.trans_fat, mi.cholesterol,
-                       mi.sodium, mi.potassium, mi.added_sugar
+                SELECT mi.id, mi.meal_id, mi.item_id, i.name, mi.quantity, mi.unit,
+                       COALESCE(i.calories, 0) * mi.quantity as calories,
+                       COALESCE(i.protein, 0) * mi.quantity as protein,
+                       COALESCE(i.carbs, 0) * mi.quantity as carbs,
+                       COALESCE(i.fat, 0) * mi.quantity as fat,
+                       COALESCE(i.fiber, 0) * mi.quantity as fiber,
+                       COALESCE(i.alcohol, 0) * mi.quantity as alcohol,
+                       COALESCE(i.saturated_fat, 0) * mi.quantity as saturated_fat,
+                       COALESCE(i.trans_fat, 0) * mi.quantity as trans_fat,
+                       COALESCE(i.cholesterol, 0) * mi.quantity as cholesterol,
+                       COALESCE(i.sodium, 0) * mi.quantity as sodium,
+                       COALESCE(i.potassium, 0) * mi.quantity as potassium,
+                       COALESCE(i.added_sugar, 0) * mi.quantity as added_sugar
                 FROM meal_items mi
-                JOIN meal_meal_items mmi ON mi.id = mmi.meal_item_id
-                JOIN meals m ON mmi.meal_id = m.id
+                JOIN items i ON mi.item_id = i.id
+                JOIN meals m ON mi.meal_id = m.id
                 WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
                 ORDER BY COALESCE(m.local_logged_at, m.logged_at), mi.id
             """, (date,))
             return [dict(row) for row in cur.fetchall()]
 
     def get_meal_item(self, item_id: int) -> Optional[dict]:
-        """Get a single meal item by ID."""
+        """Get a single meal item by ID with computed macros from items table."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
+            cur.execute("""
+                SELECT mi.id, mi.meal_id, mi.item_id, i.name, mi.quantity, mi.unit,
+                       COALESCE(i.calories, 0) * mi.quantity as calories,
+                       COALESCE(i.protein, 0) * mi.quantity as protein,
+                       COALESCE(i.carbs, 0) * mi.quantity as carbs,
+                       COALESCE(i.fat, 0) * mi.quantity as fat,
+                       COALESCE(i.fiber, 0) * mi.quantity as fiber,
+                       COALESCE(i.alcohol, 0) * mi.quantity as alcohol,
+                       COALESCE(i.saturated_fat, 0) * mi.quantity as saturated_fat,
+                       COALESCE(i.trans_fat, 0) * mi.quantity as trans_fat,
+                       COALESCE(i.cholesterol, 0) * mi.quantity as cholesterol,
+                       COALESCE(i.sodium, 0) * mi.quantity as sodium,
+                       COALESCE(i.potassium, 0) * mi.quantity as potassium,
+                       COALESCE(i.added_sugar, 0) * mi.quantity as added_sugar
+                FROM meal_items mi
+                JOIN items i ON mi.item_id = i.id
+                WHERE mi.id = %s
+            """, (item_id,))
             row = cur.fetchone()
             return dict(row) if row else None
 
-    def update_meal_item(self, item_id: int, new_amount: float) -> Optional[dict]:
-        """Update a meal item's amount and recalculate nutrition proportionally.
-        Also updates the parent meal's totals. Returns updated item or None."""
+    def update_meal_item(self, item_id: int, new_quantity: float) -> Optional[dict]:
+        """Update a meal item's quantity. Returns updated item with computed macros."""
         try:
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Get current item
-                cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
-                item = cur.fetchone()
-                if not item:
-                    return None
-
-                old_amount = item['amount']
-                if old_amount == 0:
-                    return None
-
-                ratio = new_amount / old_amount
-
-                # Calculate new nutrition values
-                new_calories = int((item['calories'] or 0) * ratio)
-                new_protein = (item['protein'] or 0) * ratio
-                new_carbs = (item['carbs'] or 0) * ratio
-                new_fat = (item['fat'] or 0) * ratio
-                new_fiber = (item['fiber'] or 0) * ratio
-                new_alcohol = (item['alcohol'] or 0) * ratio
-                new_saturated_fat = (item['saturated_fat'] or 0) * ratio
-                new_trans_fat = (item['trans_fat'] or 0) * ratio
-                new_cholesterol = (item['cholesterol'] or 0) * ratio
-                new_sodium = (item['sodium'] or 0) * ratio
-                new_potassium = (item['potassium'] or 0) * ratio
-                new_added_sugar = (item['added_sugar'] or 0) * ratio
-
-                # Update the meal item
-                cur.execute("""
-                    UPDATE meal_items
-                    SET amount = %s, calories = %s, protein = %s, carbs = %s,
-                        fat = %s, fiber = %s, alcohol = %s, saturated_fat = %s,
-                        trans_fat = %s, cholesterol = %s, sodium = %s,
-                        potassium = %s, added_sugar = %s
-                    WHERE id = %s
-                """, (new_amount, new_calories, new_protein, new_carbs,
-                      new_fat, new_fiber, new_alcohol, new_saturated_fat,
-                      new_trans_fat, new_cholesterol, new_sodium,
-                      new_potassium, new_added_sugar, item_id))
-
-                # Update totals for ALL meals linked to this item
                 cur.execute(
-                    "SELECT meal_id FROM meal_meal_items WHERE meal_item_id = %s",
-                    (item_id,))
-                linked_meal_ids = [row[0] for row in cur.fetchall()]
-                for mid in linked_meal_ids:
-                    cur.execute("""
-                        UPDATE meals SET
-                            total_calories = COALESCE(sub.cal, 0),
-                            total_protein = COALESCE(sub.pro, 0),
-                            total_carbs = COALESCE(sub.carb, 0),
-                            total_fat = COALESCE(sub.fat, 0),
-                            total_fiber = COALESCE(sub.fib, 0),
-                            total_alcohol = COALESCE(sub.alc, 0),
-                            total_saturated_fat = COALESCE(sub.satf, 0),
-                            total_trans_fat = COALESCE(sub.trf, 0),
-                            total_cholesterol = COALESCE(sub.chol, 0),
-                            total_sodium = COALESCE(sub.sod, 0),
-                            total_potassium = COALESCE(sub.pot, 0),
-                            total_added_sugar = COALESCE(sub.addsug, 0)
-                        FROM (
-                            SELECT SUM(mi.calories) as cal, SUM(mi.protein) as pro,
-                                   SUM(mi.carbs) as carb, SUM(mi.fat) as fat,
-                                   SUM(mi.fiber) as fib, SUM(mi.alcohol) as alc,
-                                   SUM(mi.saturated_fat) as satf, SUM(mi.trans_fat) as trf,
-                                   SUM(mi.cholesterol) as chol, SUM(mi.sodium) as sod,
-                                   SUM(mi.potassium) as pot, SUM(mi.added_sugar) as addsug
-                            FROM meal_items mi
-                            JOIN meal_meal_items mmi ON mi.id = mmi.meal_item_id
-                            WHERE mmi.meal_id = %s
-                        ) sub
-                        WHERE meals.id = %s
-                    """, (mid, mid))
+                    "UPDATE meal_items SET quantity = %s WHERE id = %s",
+                    (new_quantity, item_id))
+                if cur.rowcount == 0:
+                    return None
 
             self.conn.commit()
-
-            # Return updated item
-            return {
-                'id': item_id,
-                'name': item['name'],
-                'amount': new_amount,
-                'unit': item['unit'],
-                'calories': new_calories,
-                'protein': new_protein,
-                'carbs': new_carbs,
-                'fat': new_fat,
-                'fiber': new_fiber,
-                'alcohol': new_alcohol,
-                'saturated_fat': new_saturated_fat,
-                'trans_fat': new_trans_fat,
-                'cholesterol': new_cholesterol,
-                'sodium': new_sodium,
-                'potassium': new_potassium,
-                'added_sugar': new_added_sugar
-            }
+            return self.get_meal_item(item_id)
         except Exception as e:
             self.conn.rollback()
             raise
@@ -761,7 +989,7 @@ class PostgresStorage:
     }
 
     def update_meal_item_unit(self, item_id: int, new_unit: str) -> Optional[dict]:
-        """Update a meal item's unit, converting the amount where possible."""
+        """Update a meal item's unit, converting the quantity where possible."""
         try:
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
@@ -770,48 +998,23 @@ class PostgresStorage:
                     return None
 
                 old_unit = item['unit']
-                old_amount = item['amount']
+                old_quantity = item['quantity']
 
-                # Convert amount if a conversion exists, otherwise keep as-is
                 factor = self.UNIT_CONVERSIONS.get(old_unit, {}).get(new_unit)
-                new_amount = round(old_amount * factor, 2) if factor else old_amount
+                new_quantity = round(old_quantity * factor, 2) if factor else old_quantity
 
                 cur.execute(
-                    "UPDATE meal_items SET unit = %s, amount = %s WHERE id = %s",
-                    (new_unit, new_amount, item_id))
+                    "UPDATE meal_items SET unit = %s, quantity = %s WHERE id = %s",
+                    (new_unit, new_quantity, item_id))
 
             self.conn.commit()
-            result = dict(item)
-            result['unit'] = new_unit
-            result['amount'] = new_amount
-            return result
-        except Exception as e:
-            self.conn.rollback()
-            raise
-
-    def rename_meal_item(self, item_id: int, new_name: str) -> Optional[dict]:
-        """Rename a meal item. Returns updated item or None."""
-        try:
-            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
-                item = cur.fetchone()
-                if not item:
-                    return None
-
-                cur.execute(
-                    "UPDATE meal_items SET name = %s WHERE id = %s",
-                    (new_name, item_id))
-
-            self.conn.commit()
-            result = dict(item)
-            result['name'] = new_name
-            return result
+            return self.get_meal_item(item_id)
         except Exception as e:
             self.conn.rollback()
             raise
 
     def copy_meal(self, meal_id: int) -> Optional[int]:
-        """Copy a meal by creating a new meal row linked to the same items.
+        """Copy a meal by creating a new meal row + new meal_items referencing same item_ids.
         Returns new meal id or None if original not found."""
         try:
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -820,26 +1023,18 @@ class PostgresStorage:
                 if not meal:
                     return None
 
-                # Create new meal with same totals, current timestamp
                 cur.execute("""
-                    INSERT INTO meals (name, description, total_calories, total_protein,
-                                       total_carbs, total_fat, total_fiber, total_alcohol,
-                                       total_saturated_fat, total_trans_fat, total_cholesterol,
-                                       total_sodium, total_potassium, total_added_sugar)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO meals (name, description)
+                    VALUES (%s, %s)
                     RETURNING id
-                """, (meal['name'], meal['description'], meal['total_calories'],
-                      meal['total_protein'], meal['total_carbs'], meal['total_fat'],
-                      meal.get('total_fiber', 0), meal.get('total_alcohol', 0),
-                      meal.get('total_saturated_fat', 0), meal.get('total_trans_fat', 0),
-                      meal.get('total_cholesterol', 0), meal.get('total_sodium', 0),
-                      meal.get('total_potassium', 0), meal.get('total_added_sugar', 0)))
+                """, (meal['name'], meal['description']))
                 new_meal_id = cur.fetchone()['id']
 
-                # Link to same items via junction table
+                # Copy meal_items referencing same item_ids
                 cur.execute("""
-                    INSERT INTO meal_meal_items (meal_id, meal_item_id)
-                    SELECT %s, meal_item_id FROM meal_meal_items WHERE meal_id = %s
+                    INSERT INTO meal_items (meal_id, item_id, unit, quantity)
+                    SELECT %s, item_id, unit, quantity
+                    FROM meal_items WHERE meal_id = %s
                 """, (new_meal_id, meal_id))
 
             self.conn.commit()
@@ -849,35 +1044,32 @@ class PostgresStorage:
             raise
 
     def copy_item_as_meal(self, item_id: int) -> Optional[int]:
-        """Copy a meal item by creating a new meal linked to the same item.
+        """Copy a meal item by creating a new meal with one meal_item referencing same item.
         Returns new meal id or None if item not found."""
         try:
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM meal_items WHERE id = %s", (item_id,))
-                item = cur.fetchone()
-                if not item:
+                # Get the meal_item with item name
+                cur.execute("""
+                    SELECT mi.*, i.name
+                    FROM meal_items mi
+                    JOIN items i ON mi.item_id = i.id
+                    WHERE mi.id = %s
+                """, (item_id,))
+                mi = cur.fetchone()
+                if not mi:
                     return None
 
-                # Create new meal with item's nutrition as totals
                 cur.execute("""
-                    INSERT INTO meals (name, description, total_calories, total_protein,
-                                       total_carbs, total_fat, total_fiber, total_alcohol,
-                                       total_saturated_fat, total_trans_fat, total_cholesterol,
-                                       total_sodium, total_potassium, total_added_sugar)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO meals (name, description)
+                    VALUES (%s, %s)
                     RETURNING id
-                """, (item['name'], item['name'], item['calories'],
-                      item['protein'], item['carbs'], item['fat'],
-                      item.get('fiber', 0), item.get('alcohol', 0),
-                      item.get('saturated_fat', 0), item.get('trans_fat', 0),
-                      item.get('cholesterol', 0), item.get('sodium', 0),
-                      item.get('potassium', 0), item.get('added_sugar', 0)))
+                """, (mi['name'], mi['name']))
                 new_meal_id = cur.fetchone()['id']
 
-                # Link to same item via junction table
                 cur.execute("""
-                    INSERT INTO meal_meal_items (meal_id, meal_item_id) VALUES (%s, %s)
-                """, (new_meal_id, item_id))
+                    INSERT INTO meal_items (meal_id, item_id, unit, quantity)
+                    VALUES (%s, %s, %s, %s)
+                """, (new_meal_id, mi['item_id'], mi['unit'], mi['quantity']))
 
             self.conn.commit()
             return new_meal_id
@@ -886,21 +1078,8 @@ class PostgresStorage:
             raise
 
     def delete_meal(self, meal_id: int) -> bool:
-        """Delete a meal. Cleans up items not referenced by any other meal."""
+        """Delete a meal. CASCADE handles meal_items cleanup."""
         with self.conn.cursor() as cur:
-            # Delete items that are only linked to this meal (would become orphans)
-            cur.execute("""
-                DELETE FROM meal_items WHERE id IN (
-                    SELECT mmi.meal_item_id FROM meal_meal_items mmi
-                    WHERE mmi.meal_id = %s
-                    AND NOT EXISTS (
-                        SELECT 1 FROM meal_meal_items mmi2
-                        WHERE mmi2.meal_item_id = mmi.meal_item_id
-                        AND mmi2.meal_id != %s
-                    )
-                )
-            """, (meal_id, meal_id))
-            # Delete the meal (cascades to its junction entries)
             cur.execute("DELETE FROM meals WHERE id = %s", (meal_id,))
             deleted = cur.rowcount > 0
         self.conn.commit()
@@ -980,71 +1159,61 @@ class PostgresStorage:
         """Get daily calories history. If days is None, returns all history.
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            base = """
+                SELECT DATE(COALESCE(m.local_logged_at, m.logged_at)) as date,
+                       SUM(COALESCE(i.calories, 0) * mi.quantity) as calories
+                FROM meals m
+                JOIN meal_items mi ON mi.meal_id = m.id
+                JOIN items i ON mi.item_id = i.id
+                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) < CURRENT_DATE
+            """
             if days:
-                cur.execute("""
-                    SELECT DATE(COALESCE(local_logged_at, logged_at)) as date, SUM(total_calories) as calories
-                    FROM meals
-                    WHERE DATE(COALESCE(local_logged_at, logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
-                      AND DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
-                    GROUP BY DATE(COALESCE(local_logged_at, logged_at))
+                cur.execute(base + """
+                    AND DATE(COALESCE(m.local_logged_at, m.logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
                 """, (days,))
             else:
-                cur.execute("""
-                    SELECT DATE(COALESCE(local_logged_at, logged_at)) as date, SUM(total_calories) as calories
-                    FROM meals
-                    WHERE DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
-                    GROUP BY DATE(COALESCE(local_logged_at, logged_at))
+                cur.execute(base + """
+                    GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
                 """)
-            return [{'date': str(row['date']), 'calories': int(row['calories'])} for row in cur.fetchall()]
+            return [{'date': str(row['date']), 'calories': int(row['calories'] or 0)} for row in cur.fetchall()]
 
     def get_macros_history(self, days: Optional[int] = None) -> list[dict]:
         """Get daily macros history for all nutrients. If days is None, returns all history.
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            query = """
-                SELECT DATE(COALESCE(local_logged_at, logged_at)) as date,
-                    SUM(total_calories) as calories,
-                    SUM(total_protein) as protein,
-                    SUM(total_carbs) as carbs,
-                    SUM(total_fat) as fat,
-                    SUM(total_fiber) as fiber,
-                    SUM(total_alcohol) as alcohol,
-                    SUM(total_saturated_fat) as saturated_fat,
-                    SUM(total_trans_fat) as trans_fat,
-                    SUM(total_cholesterol) as cholesterol,
-                    SUM(total_sodium) as sodium,
-                    SUM(total_potassium) as potassium,
-                    SUM(total_added_sugar) as added_sugar
-                FROM meals
-                WHERE DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
+            base = """
+                SELECT DATE(COALESCE(m.local_logged_at, m.logged_at)) as date,
+                    SUM(COALESCE(i.calories, 0) * mi.quantity) as calories,
+                    SUM(COALESCE(i.protein, 0) * mi.quantity) as protein,
+                    SUM(COALESCE(i.carbs, 0) * mi.quantity) as carbs,
+                    SUM(COALESCE(i.fat, 0) * mi.quantity) as fat,
+                    SUM(COALESCE(i.fiber, 0) * mi.quantity) as fiber,
+                    SUM(COALESCE(i.alcohol, 0) * mi.quantity) as alcohol,
+                    SUM(COALESCE(i.saturated_fat, 0) * mi.quantity) as saturated_fat,
+                    SUM(COALESCE(i.trans_fat, 0) * mi.quantity) as trans_fat,
+                    SUM(COALESCE(i.cholesterol, 0) * mi.quantity) as cholesterol,
+                    SUM(COALESCE(i.sodium, 0) * mi.quantity) as sodium,
+                    SUM(COALESCE(i.potassium, 0) * mi.quantity) as potassium,
+                    SUM(COALESCE(i.added_sugar, 0) * mi.quantity) as added_sugar
+                FROM meals m
+                JOIN meal_items mi ON mi.meal_id = m.id
+                JOIN items i ON mi.item_id = i.id
+                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) < CURRENT_DATE
             """
             if days:
-                query = """
-                    SELECT DATE(COALESCE(local_logged_at, logged_at)) as date,
-                        SUM(total_calories) as calories,
-                        SUM(total_protein) as protein,
-                        SUM(total_carbs) as carbs,
-                        SUM(total_fat) as fat,
-                        SUM(total_fiber) as fiber,
-                        SUM(total_alcohol) as alcohol,
-                        SUM(total_saturated_fat) as saturated_fat,
-                        SUM(total_trans_fat) as trans_fat,
-                        SUM(total_cholesterol) as cholesterol,
-                        SUM(total_sodium) as sodium,
-                        SUM(total_potassium) as potassium,
-                        SUM(total_added_sugar) as added_sugar
-                    FROM meals
-                    WHERE DATE(COALESCE(local_logged_at, logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
-                      AND DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
-                    GROUP BY DATE(COALESCE(local_logged_at, logged_at))
+                cur.execute(base + """
+                    AND DATE(COALESCE(m.local_logged_at, m.logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
-                """
-                cur.execute(query, (days,))
+                """, (days,))
             else:
-                query += " GROUP BY DATE(COALESCE(local_logged_at, logged_at)) ORDER BY date ASC"
-                cur.execute(query)
+                cur.execute(base + """
+                    GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
+                    ORDER BY date ASC
+                """)
 
             return [{
                 'date': str(row['date']),
