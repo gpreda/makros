@@ -154,9 +154,38 @@ class PostgresStorage:
                     END IF;
                 END $$;
             """)
+            # Add local_logged_at column for user's local time (migration)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'meals' AND column_name = 'local_logged_at'
+                    ) THEN
+                        ALTER TABLE meals ADD COLUMN local_logged_at TIMESTAMP;
+                        UPDATE meals SET local_logged_at = logged_at WHERE local_logged_at IS NULL;
+                    END IF;
+                END $$;
+            """)
+            # Add timezone column for user's IANA timezone (migration)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'meals' AND column_name = 'timezone'
+                    ) THEN
+                        ALTER TABLE meals ADD COLUMN timezone VARCHAR(50);
+                    END IF;
+                END $$;
+            """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_meals_logged_at
                 ON meals(logged_at)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_meals_local_logged_at
+                ON meals(local_logged_at)
             """)
 
             # Meal items (ingredients in a meal)
@@ -404,7 +433,9 @@ class PostgresStorage:
     # Meal operations
     def log_meal(self, description: str, items: list[dict], totals: dict,
                  logged_at: Optional[datetime] = None, name: Optional[str] = None,
-                 image_data: Optional[bytes] = None) -> int:
+                 image_data: Optional[bytes] = None,
+                 local_logged_at: Optional[datetime] = None,
+                 timezone: Optional[str] = None) -> int:
         """Log a meal with its items. Returns meal id."""
         try:
             with self.conn.cursor() as cur:
@@ -415,29 +446,30 @@ class PostgresStorage:
                                            total_carbs, total_fat, total_fiber, total_alcohol,
                                            total_saturated_fat, total_trans_fat, total_cholesterol,
                                            total_sodium, total_potassium, total_added_sugar,
-                                           logged_at, image_data)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                           logged_at, image_data, local_logged_at, timezone)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (name, description, totals.get('calories'), totals.get('protein'),
                           totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
                           totals.get('alcohol', 0), totals.get('saturated_fat', 0),
                           totals.get('trans_fat', 0), totals.get('cholesterol', 0),
                           totals.get('sodium', 0), totals.get('potassium', 0),
-                          totals.get('added_sugar', 0), logged_at, image_data))
+                          totals.get('added_sugar', 0), logged_at, image_data, local_logged_at, timezone))
                 else:
                     cur.execute("""
                         INSERT INTO meals (name, description, total_calories, total_protein,
                                            total_carbs, total_fat, total_fiber, total_alcohol,
                                            total_saturated_fat, total_trans_fat, total_cholesterol,
-                                           total_sodium, total_potassium, total_added_sugar, image_data)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                           total_sodium, total_potassium, total_added_sugar,
+                                           image_data, local_logged_at, timezone)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (name, description, totals.get('calories'), totals.get('protein'),
                           totals.get('carbs'), totals.get('fat'), totals.get('fiber'),
                           totals.get('alcohol', 0), totals.get('saturated_fat', 0),
                           totals.get('trans_fat', 0), totals.get('cholesterol', 0),
                           totals.get('sodium', 0), totals.get('potassium', 0),
-                          totals.get('added_sugar', 0), image_data))
+                          totals.get('added_sugar', 0), image_data, local_logged_at, timezone))
                 meal_id = cur.fetchone()[0]
 
                 # Insert meal items
@@ -468,21 +500,25 @@ class PostgresStorage:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             if date:
                 cur.execute("""
-                    SELECT id, name, description, logged_at, total_calories, total_protein,
+                    SELECT id, name, description, logged_at,
+                           COALESCE(local_logged_at, logged_at) as local_logged_at,
+                           total_calories, total_protein,
                            total_carbs, total_fat, total_fiber, total_alcohol,
                            (image_data IS NOT NULL) as has_image
                     FROM meals
-                    WHERE DATE(logged_at) = DATE(%s)
-                    ORDER BY logged_at ASC
+                    WHERE DATE(COALESCE(local_logged_at, logged_at)) = DATE(%s)
+                    ORDER BY COALESCE(local_logged_at, logged_at) ASC
                     LIMIT %s OFFSET %s
                 """, (date, limit, offset))
             else:
                 cur.execute("""
-                    SELECT id, name, description, logged_at, total_calories, total_protein,
+                    SELECT id, name, description, logged_at,
+                           COALESCE(local_logged_at, logged_at) as local_logged_at,
+                           total_calories, total_protein,
                            total_carbs, total_fat, total_fiber, total_alcohol,
                            (image_data IS NOT NULL) as has_image
                     FROM meals
-                    ORDER BY logged_at ASC
+                    ORDER BY COALESCE(local_logged_at, logged_at) ASC
                     LIMIT %s OFFSET %s
                 """, (limit, offset))
             return [dict(row) for row in cur.fetchall()]
@@ -533,7 +569,7 @@ class PostgresStorage:
                     COALESCE(SUM(total_added_sugar), 0) as added_sugar,
                     COUNT(*) as meal_count
                 FROM meals
-                WHERE DATE(logged_at) = DATE(%s)
+                WHERE DATE(COALESCE(local_logged_at, logged_at)) = DATE(%s)
             """, (date,))
             return dict(cur.fetchone())
 
@@ -550,8 +586,8 @@ class PostgresStorage:
                        mi.sodium, mi.potassium, mi.added_sugar
                 FROM meal_items mi
                 JOIN meals m ON mi.meal_id = m.id
-                WHERE DATE(m.logged_at) = DATE(%s)
-                ORDER BY m.logged_at, mi.id
+                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
+                ORDER BY COALESCE(m.local_logged_at, m.logged_at), mi.id
             """, (date,))
             return [dict(row) for row in cur.fetchall()]
 
@@ -721,19 +757,19 @@ class PostgresStorage:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             if days:
                 cur.execute("""
-                    SELECT DATE(logged_at) as date, SUM(total_calories) as calories
+                    SELECT DATE(COALESCE(local_logged_at, logged_at)) as date, SUM(total_calories) as calories
                     FROM meals
-                    WHERE DATE(logged_at) >= CURRENT_DATE - %s * INTERVAL '1 day'
-                      AND DATE(logged_at) < CURRENT_DATE
-                    GROUP BY DATE(logged_at)
+                    WHERE DATE(COALESCE(local_logged_at, logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                      AND DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
+                    GROUP BY DATE(COALESCE(local_logged_at, logged_at))
                     ORDER BY date ASC
                 """, (days,))
             else:
                 cur.execute("""
-                    SELECT DATE(logged_at) as date, SUM(total_calories) as calories
+                    SELECT DATE(COALESCE(local_logged_at, logged_at)) as date, SUM(total_calories) as calories
                     FROM meals
-                    WHERE DATE(logged_at) < CURRENT_DATE
-                    GROUP BY DATE(logged_at)
+                    WHERE DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
+                    GROUP BY DATE(COALESCE(local_logged_at, logged_at))
                     ORDER BY date ASC
                 """)
             return [{'date': str(row['date']), 'calories': int(row['calories'])} for row in cur.fetchall()]
@@ -743,7 +779,7 @@ class PostgresStorage:
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             query = """
-                SELECT DATE(logged_at) as date,
+                SELECT DATE(COALESCE(local_logged_at, logged_at)) as date,
                     SUM(total_calories) as calories,
                     SUM(total_protein) as protein,
                     SUM(total_carbs) as carbs,
@@ -757,11 +793,11 @@ class PostgresStorage:
                     SUM(total_potassium) as potassium,
                     SUM(total_added_sugar) as added_sugar
                 FROM meals
-                WHERE DATE(logged_at) < CURRENT_DATE
+                WHERE DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
             """
             if days:
                 query = """
-                    SELECT DATE(logged_at) as date,
+                    SELECT DATE(COALESCE(local_logged_at, logged_at)) as date,
                         SUM(total_calories) as calories,
                         SUM(total_protein) as protein,
                         SUM(total_carbs) as carbs,
@@ -775,14 +811,14 @@ class PostgresStorage:
                         SUM(total_potassium) as potassium,
                         SUM(total_added_sugar) as added_sugar
                     FROM meals
-                    WHERE DATE(logged_at) >= CURRENT_DATE - %s * INTERVAL '1 day'
-                      AND DATE(logged_at) < CURRENT_DATE
-                    GROUP BY DATE(logged_at)
+                    WHERE DATE(COALESCE(local_logged_at, logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
+                      AND DATE(COALESCE(local_logged_at, logged_at)) < CURRENT_DATE
+                    GROUP BY DATE(COALESCE(local_logged_at, logged_at))
                     ORDER BY date ASC
                 """
                 cur.execute(query, (days,))
             else:
-                query += " GROUP BY DATE(logged_at) ORDER BY date ASC"
+                query += " GROUP BY DATE(COALESCE(local_logged_at, logged_at)) ORDER BY date ASC"
                 cur.execute(query)
 
             return [{

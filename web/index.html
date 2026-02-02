@@ -967,6 +967,17 @@
             return `${year}-${month}-${day}`;
         }
 
+        function getLocalTimeISO() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+        }
+
         function isToday(date) {
             const today = new Date();
             return getDateString(date) === getDateString(today);
@@ -1211,10 +1222,18 @@
 
                 const showCopyBtn = !isToday(currentDate);
                 list.innerHTML = data.meals.map(meal => {
-                    const time = new Date(meal.logged_at).toLocaleTimeString('en-US', {
-                        hour: 'numeric',
-                        minute: '2-digit'
-                    });
+                    // Parse local_logged_at directly to avoid timezone re-interpretation.
+                    // The stored time represents the user's local time when they logged the meal.
+                    const localTs = meal.local_logged_at || meal.logged_at;
+                    const timeParts = localTs.match(/(\d{2}):(\d{2})/);
+                    let time = '';
+                    if (timeParts) {
+                        const hours = parseInt(timeParts[1], 10);
+                        const mins = timeParts[2];
+                        const ampm = hours >= 12 ? 'PM' : 'AM';
+                        const h12 = hours % 12 || 12;
+                        time = `${h12}:${mins} ${ampm}`;
+                    }
                     const copyBtn = showCopyBtn
                         ? `<button class="copy-btn" onclick="copyMeal(${meal.id})" title="Copy to today">&#x2398;</button>`
                         : '';
@@ -1620,6 +1639,8 @@
                     formData.append('items', JSON.stringify(currentAnalysis.items));
                     formData.append('totals', JSON.stringify(currentAnalysis.totals));
                     formData.append('date', getDateString(currentDate));
+                    formData.append('local_time', getLocalTimeISO());
+                    formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
                     if (currentAnalysis.meal_name) {
                         formData.append('meal_name', currentAnalysis.meal_name);
                     }
@@ -1638,6 +1659,8 @@
                             items: currentAnalysis.items,
                             totals: currentAnalysis.totals,
                             date: getDateString(currentDate),
+                            local_time: getLocalTimeISO(),
+                            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                             meal_name: currentAnalysis.meal_name
                         })
                     });
@@ -1812,6 +1835,8 @@
                     formData.append('items', JSON.stringify(currentAnalysis.items));
                     formData.append('totals', JSON.stringify(currentAnalysis.totals));
                     formData.append('date', getDateString(currentDate));
+                    formData.append('local_time', getLocalTimeISO());
+                    formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
                     if (currentAnalysis.meal_name) {
                         formData.append('meal_name', currentAnalysis.meal_name);
                     }
@@ -1831,6 +1856,8 @@
                             items: currentAnalysis.items,
                             totals: currentAnalysis.totals,
                             date: getDateString(currentDate),
+                            local_time: getLocalTimeISO(),
+                            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                             meal_name: currentAnalysis.meal_name
                         })
                     });

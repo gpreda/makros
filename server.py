@@ -37,6 +37,8 @@ class LogMealRequest(BaseModel):
     totals: dict
     date: Optional[str] = None  # Browser's local date (YYYY-MM-DD)
     meal_name: Optional[str] = None  # Short name for the meal
+    local_time: Optional[str] = None  # Browser's local datetime (ISO format)
+    timezone: Optional[str] = None  # Browser's IANA timezone (e.g. America/New_York)
 
 
 class ItemCreate(BaseModel):
@@ -602,12 +604,19 @@ async def log_meal_endpoint(request: LogMealRequest):
             now = datetime.now()
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
+        # Parse browser's local datetime if provided
+        local_logged_at = None
+        if request.local_time:
+            local_logged_at = datetime.fromisoformat(request.local_time)
+
         # Generate smart meal name from items
         meal_name = generate_smart_meal_name(request.items)
 
         db_start = time.time()
         meal_id = storage.log_meal(request.description, request.items, request.totals,
-                                   logged_at=meal_datetime, name=meal_name)
+                                   logged_at=meal_datetime, name=meal_name,
+                                   local_logged_at=local_logged_at,
+                                   timezone=request.timezone)
         db_ms = int((time.time() - db_start) * 1000)
 
         # Log the meal logging event
@@ -634,6 +643,8 @@ async def log_meal_with_image(
     totals: str = Form(...),  # JSON string
     date: Optional[str] = Form(None),
     meal_name: Optional[str] = Form(None),
+    local_time: Optional[str] = Form(None),
+    timezone: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
     """Log a meal with an optional image."""
@@ -651,6 +662,11 @@ async def log_meal_with_image(
             now = datetime.now()
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
+        # Parse browser's local datetime if provided
+        local_logged_at = None
+        if local_time:
+            local_logged_at = datetime.fromisoformat(local_time)
+
         # Read image data if provided
         image_data = None
         if image:
@@ -662,7 +678,9 @@ async def log_meal_with_image(
         db_start = time.time()
         meal_id = storage.log_meal(description, items_list, totals_dict,
                                    logged_at=meal_datetime, name=smart_name,
-                                   image_data=image_data)
+                                   image_data=image_data,
+                                   local_logged_at=local_logged_at,
+                                   timezone=timezone)
         db_ms = int((time.time() - db_start) * 1000)
 
         # Log the meal logging event
