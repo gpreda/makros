@@ -268,6 +268,37 @@
             color: #888;
             font-size: 14px;
         }
+        .weekly-target-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        .weekly-label {
+            color: #888;
+            font-size: 13px;
+        }
+        #weekly-summary {
+            color: #888;
+            font-size: 13px;
+        }
+        #weekly-summary .wk-consumed {
+            color: #4ecca3;
+            font-weight: 600;
+        }
+        #weekly-summary .wk-target {
+            color: #ff9f43;
+            font-weight: 600;
+        }
+        #weekly-summary .wk-left {
+            color: #ff9f43;
+            font-weight: 600;
+        }
+        #weekly-summary .wk-avg {
+            color: #ff9f43;
+            font-weight: 600;
+        }
         .target-save-btn {
             background: #0f3460;
             color: #4ecca3;
@@ -887,6 +918,10 @@
                 <input type="number" id="target-input" placeholder="--" step="1" min="0" onkeydown="if(event.key==='Enter'){saveCaloricTarget();event.preventDefault();}">
                 <span class="target-unit">kcal</span>
             </div>
+            <div class="weekly-target-row hidden" id="weekly-target-row">
+                <span class="weekly-label">Week</span>
+                <span id="weekly-summary"></span>
+            </div>
             <div class="burnt-row">
                 <span class="burnt-label">Burnt Calories:</span>
                 <span id="burnt-calories">0</span>
@@ -1257,8 +1292,57 @@
                 } else {
                     input.value = '';
                 }
+                loadWeeklySummary(data.target_calories);
             } catch (e) {
                 console.error('Failed to load caloric target:', e);
+            }
+        }
+
+        async function loadWeeklySummary(dailyTarget) {
+            const row = document.getElementById('weekly-target-row');
+            if (!dailyTarget) {
+                row.classList.add('hidden');
+                return;
+            }
+
+            try {
+                // Find Sunday of the week containing currentDate
+                const sunday = new Date(currentDate);
+                sunday.setDate(sunday.getDate() - sunday.getDay());
+
+                // Find Saturday of the week
+                const saturday = new Date(sunday);
+                saturday.setDate(saturday.getDate() + 6);
+
+                // Fetch daily totals for each day from Sunday to currentDate
+                const dayPromises = [];
+                const d = new Date(sunday);
+                while (d <= currentDate && d <= saturday) {
+                    const dateStr = getDateString(d);
+                    dayPromises.push(
+                        fetch(`/api/daily?date=${dateStr}`).then(r => r.json()).catch(() => ({ calories: 0 }))
+                    );
+                    d.setDate(d.getDate() + 1);
+                }
+
+                const dayResults = await Promise.all(dayPromises);
+                const consumedSoFar = dayResults.reduce((sum, d) => sum + Math.round(d.calories || 0), 0);
+                const todayCalories = dayResults.length > 0 ? Math.round(dayResults[dayResults.length - 1].calories || 0) : 0;
+                const consumedBeforeToday = consumedSoFar - todayCalories;
+
+                const weeklyTarget = dailyTarget * 7;
+                const dayOfWeek = currentDate.getDay(); // 0=Sun, 6=Sat
+                const remainingDaysIncludingToday = 7 - dayOfWeek; // Sun=7, Sat=1
+                const left = weeklyTarget - consumedSoFar;
+                const avg = Math.round((weeklyTarget - consumedBeforeToday) / remainingDaysIncludingToday);
+
+                const el = document.getElementById('weekly-summary');
+                el.innerHTML = `<span class="wk-consumed">${consumedSoFar.toLocaleString()}</span> / <span class="wk-target">${weeklyTarget.toLocaleString()}</span> - Left <span class="wk-left">${left.toLocaleString()}</span> - Avg <span class="wk-avg">${avg.toLocaleString()}</span>`;
+
+                row.classList.remove('hidden');
+            } catch (e) {
+                console.error('Failed to load weekly summary:', e);
+                row.classList.add('hidden');
             }
         }
 
@@ -1280,6 +1364,7 @@
                 });
                 if (!res.ok) throw new Error('Failed to save');
                 loadDailySummary();
+                loadWeeklySummary(target);
             } catch (e) {
                 alert('Failed to save caloric target');
             }

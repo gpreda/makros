@@ -420,7 +420,7 @@ IMPORTANT - Item granularity rules:
 For each item, provide:
 - name: item name (string) - use the product name for branded items
 - amount: numeric quantity (float) - use 1 for single items like burgers
-- unit: one of [{units_list}] - use 'item' for countable products. IMPORTANT: if the user specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g", "cheese 2 oz"), you MUST use that exact unit and amount
+- unit: one of [{units_list}] - PREFER 'oz' for solid foods and 'fl_oz' for liquids/beverages. Use 'item' ONLY for inherently whole/countable foods like eggs, whole fruits (apple, banana, orange), whole vegetables (bell pepper, avocado), slices, or individually wrapped products. IMPORTANT: if the user specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g", "cheese 2 oz"), you MUST use that exact unit and amount
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -544,7 +544,7 @@ FOR FOOD PHOTOS:
 For each item, provide:
 - name: item name (string)
 - amount: numeric quantity (float) - from label serving size or visual estimate
-- unit: one of [{units_list}] - use 'g' or 'serving' as appropriate. IMPORTANT: if the user hint specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g"), you MUST use that exact unit and amount
+- unit: one of [{units_list}] - PREFER 'oz' for solid foods and 'fl_oz' for liquids/beverages. Use 'item' ONLY for inherently whole/countable foods like eggs, whole fruits (apple, banana, orange), whole vegetables (bell pepper, avocado), slices, or individually wrapped products. IMPORTANT: if the user hint specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g"), you MUST use that exact unit and amount
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -1268,7 +1268,7 @@ Respond with ONLY a Python dictionary in this exact format:
 {{
     'confidence': 0.95,  # Float 0-1: How confident you are this is a real food with known nutrition
     'recognized': True,  # Boolean: Is this a recognizable food item?
-    'recommended_unit': 'item',  # 'g' for bulk foods (rice, meat), 'item' for countable items (burger, apple, egg)
+    'recommended_unit': 'oz',  # 'oz' for solid foods, 'fl_oz' for liquids/beverages, 'item' ONLY for whole/countable foods (eggs, whole fruits, whole vegetables)
     'per_100g': {{
         'calories': 250,
         'protein': 10.0,
@@ -1289,8 +1289,9 @@ Respond with ONLY a Python dictionary in this exact format:
 }}
 
 Guidelines:
-- recommended_unit should be 'item' for: burgers, sandwiches, eggs, fruits, cookies, slices, etc.
-- recommended_unit should be 'g' for: rice, pasta, meat (raw/cooked), vegetables, liquids, etc.
+- recommended_unit should be 'oz' for most solid foods: burgers, sandwiches, meat, rice, pasta, cookies, vegetables, etc.
+- recommended_unit should be 'fl_oz' for liquids and beverages: milk, juice, coffee, soup, etc.
+- recommended_unit should be 'item' ONLY for inherently whole/countable foods: eggs, whole fruits (apple, banana, orange), whole vegetables (bell pepper, avocado), slices
 - per_item should be None for bulk foods that don't have a standard piece size
 - Confidence 0.9-1.0: Common foods, 0.7-0.9: Less common, 0.4-0.7: Vague, 0.0-0.4: Unknown
 

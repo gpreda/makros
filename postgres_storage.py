@@ -510,17 +510,19 @@ class PostgresStorage:
 
                 self._conn.commit()
 
-            # Drop obsolete column from items if present
+            # Mark items with 0 meals as obsolete
             cur.execute("""
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'items' AND column_name = 'obsolete'
-                    ) THEN
-                        ALTER TABLE items DROP COLUMN obsolete;
-                    END IF;
-                END $$;
+                UPDATE items SET obsolete = TRUE
+                WHERE id NOT IN (
+                    SELECT DISTINCT item_id FROM meal_items
+                )
+            """)
+            # Ensure items that DO have meals are not obsolete
+            cur.execute("""
+                UPDATE items SET obsolete = FALSE
+                WHERE id IN (
+                    SELECT DISTINCT item_id FROM meal_items
+                )
             """)
             self._conn.commit()
 
@@ -682,28 +684,29 @@ class PostgresStorage:
         return deleted
 
     def search_items(self, query: str, limit: int = 20) -> list[Item]:
-        """Search items by name (partial match)."""
+        """Search items by name (partial match), excluding obsolete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 SELECT * FROM items
                 WHERE LOWER(name) LIKE LOWER(%s)
+                  AND (obsolete IS NOT TRUE)
                 ORDER BY name LIMIT %s
             """, (f'%{query}%', limit))
             return [self._row_to_item(row) for row in cur.fetchall()]
 
     def list_items(self, limit: int = 100, offset: int = 0) -> list[Item]:
-        """List all items with pagination."""
+        """List all non-obsolete items with pagination."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT * FROM items ORDER BY name LIMIT %s OFFSET %s",
+                "SELECT * FROM items WHERE obsolete IS NOT TRUE ORDER BY name LIMIT %s OFFSET %s",
                 (limit, offset)
             )
             return [self._row_to_item(row) for row in cur.fetchall()]
 
     def count_items(self) -> int:
-        """Get total number of items."""
+        """Get total number of non-obsolete items."""
         with self.conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM items")
+            cur.execute("SELECT COUNT(*) FROM items WHERE obsolete IS NOT TRUE")
             return cur.fetchone()[0]
 
     def get_item_meal_counts(self, item_names: list[str]) -> dict[str, int]:
