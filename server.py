@@ -460,7 +460,7 @@ Return ONLY the dictionary, no other text or markdown.
     model_ms = int((time.time() - start_time) * 1000)
 
     text = response.text.strip()
-    text = text.replace('```python', '').replace('```', '').strip()
+    text = text.replace('```python', '').replace('```json', '').replace('```', '').strip()
 
     # Get token usage if available
     model_tokens = None
@@ -592,7 +592,7 @@ Return ONLY the dictionary, no other text or markdown.
     model_ms = int((time.time() - start_time) * 1000)
 
     text = response.text.strip()
-    text = text.replace('```python', '').replace('```', '').strip()
+    text = text.replace('```python', '').replace('```json', '').replace('```', '').strip()
 
     # Get token usage if available
     model_tokens = None
