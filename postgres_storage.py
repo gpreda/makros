@@ -125,6 +125,22 @@ class PostgresStorage:
                 END $$;
             """)
 
+            # Add default_quantity column to items
+            cur.execute("""
+                ALTER TABLE items ADD COLUMN IF NOT EXISTS default_quantity REAL DEFAULT 0
+            """)
+            # Backfill default_quantity from most recent meal_items
+            cur.execute("""
+                UPDATE items SET default_quantity = sub.quantity
+                FROM (
+                    SELECT DISTINCT ON (mi.item_id) mi.item_id, mi.amount as quantity
+                    FROM meal_items mi
+                    JOIN meals m ON mi.meal_id = m.id
+                    ORDER BY mi.item_id, m.logged_at DESC
+                ) sub
+                WHERE items.id = sub.item_id AND items.default_quantity = 0
+            """)
+
             # Meals table (logged meals)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS meals (
@@ -603,15 +619,17 @@ class PostgresStorage:
                 cur.execute("""
                     INSERT INTO items (bar_code, name, description, unit_conversions,
                                        default_unit, calories, protein, carbs, fat, fiber, alcohol,
-                                       saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar,
+                                       default_quantity)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (item.bar_code, item.name, item.description,
                       json.dumps(item.unit_conversions), item.default_unit,
                       item.calories, item.protein, item.carbs, item.fat,
                       item.fiber, item.alcohol,
                       item.saturated_fat, item.trans_fat, item.cholesterol,
-                      item.sodium, item.potassium, item.added_sugar))
+                      item.sodium, item.potassium, item.added_sugar,
+                      item.default_quantity))
                 item.id = cur.fetchone()[0]
             self.conn.commit()
             return item
@@ -662,6 +680,7 @@ class PostgresStorage:
                     fat = %s, fiber = %s, alcohol = %s,
                     saturated_fat = %s, trans_fat = %s, cholesterol = %s,
                     sodium = %s, potassium = %s, added_sugar = %s,
+                    default_quantity = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (item.bar_code, item.name, item.description,
@@ -670,10 +689,19 @@ class PostgresStorage:
                   item.fiber, item.alcohol,
                   item.saturated_fat, item.trans_fat, item.cholesterol,
                   item.sodium, item.potassium, item.added_sugar,
+                  item.default_quantity,
                   item.id))
             updated = cur.rowcount > 0
         self.conn.commit()
         return updated
+
+    def update_item_default_quantity(self, item_id: int, quantity: float) -> None:
+        """Update an item's default_quantity."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE items SET default_quantity = %s WHERE id = %s",
+                (quantity, item_id))
+        self.conn.commit()
 
     def delete_item(self, item_id: int) -> bool:
         """Delete an item. Returns True if deleted."""
@@ -755,6 +783,7 @@ class PostgresStorage:
             potassium=row.get('potassium'),
             added_sugar=row.get('added_sugar'),
             created_at=row['created_at'].isoformat() if row.get('created_at') else None,
+            default_quantity=row.get('default_quantity', 0) or 0,
         )
 
     # Meal operations

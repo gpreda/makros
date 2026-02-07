@@ -629,6 +629,7 @@
                         ${item.bar_code ? `<div class="item-barcode">${escapeHtml(item.bar_code)}</div>` : ''}
                     </td>
                     <td><span class="unit-badge">${item.default_unit || 'item'}</span></td>
+                    <td class="nutrition-cell">${item.default_quantity || 0}</td>
                     <td class="nutrition-cell">${Math.round(item.calories || 0)}</td>
                     <td class="nutrition-cell">${(item.protein || 0).toFixed(1)}</td>
                     <td class="nutrition-cell">${(item.carbs || 0).toFixed(1)}</td>
@@ -654,6 +655,7 @@
                         <tr>
                             <th class="sortable" onclick="toggleSort('name')">Item${sortArrow('name')}</th>
                             <th>Unit</th>
+                            <th>Qty</th>
                             <th>Kcal</th>
                             <th>Protein</th>
                             <th>Carbs</th>

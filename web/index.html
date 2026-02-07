@@ -2333,23 +2333,36 @@
                 const item = currentSuggestions[index];
                 if (!item) return;
 
+                const qty = item.default_quantity || 1;
                 const analysisItem = {
                     item_id: item.id,
                     name: item.name,
-                    amount: 1,
+                    amount: qty,
                     unit: item.default_unit || 'serving',
-                    calories: item.calories || 0,
-                    protein: item.protein || 0,
-                    carbs: item.carbs || 0,
-                    fat: item.fat || 0,
-                    fiber: item.fiber || 0,
-                    alcohol: item.alcohol || 0,
-                    saturated_fat: item.saturated_fat || 0,
-                    trans_fat: item.trans_fat || 0,
-                    cholesterol: item.cholesterol || 0,
-                    sodium: item.sodium || 0,
-                    potassium: item.potassium || 0,
-                    added_sugar: item.added_sugar || 0
+                    calories: (item.calories || 0) * qty,
+                    protein: (item.protein || 0) * qty,
+                    carbs: (item.carbs || 0) * qty,
+                    fat: (item.fat || 0) * qty,
+                    fiber: (item.fiber || 0) * qty,
+                    alcohol: (item.alcohol || 0) * qty,
+                    saturated_fat: (item.saturated_fat || 0) * qty,
+                    trans_fat: (item.trans_fat || 0) * qty,
+                    cholesterol: (item.cholesterol || 0) * qty,
+                    sodium: (item.sodium || 0) * qty,
+                    potassium: (item.potassium || 0) * qty,
+                    added_sugar: (item.added_sugar || 0) * qty,
+                    calories_perUnit: item.calories || 0,
+                    protein_perUnit: item.protein || 0,
+                    carbs_perUnit: item.carbs || 0,
+                    fat_perUnit: item.fat || 0,
+                    fiber_perUnit: item.fiber || 0,
+                    alcohol_perUnit: item.alcohol || 0,
+                    saturated_fat_perUnit: item.saturated_fat || 0,
+                    trans_fat_perUnit: item.trans_fat || 0,
+                    cholesterol_perUnit: item.cholesterol || 0,
+                    sodium_perUnit: item.sodium || 0,
+                    potassium_perUnit: item.potassium || 0,
+                    added_sugar_perUnit: item.added_sugar || 0
                 };
 
                 const data = {

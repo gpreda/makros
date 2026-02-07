@@ -46,6 +46,7 @@ class ItemCreate(BaseModel):
     description: Optional[str] = None
     unit_conversions: dict[str, float] = {}
     default_unit: str = 'g'
+    default_quantity: float = 0
     calories: Optional[float] = None
     protein: Optional[float] = None
     carbs: Optional[float] = None
@@ -66,6 +67,7 @@ class ItemUpdate(BaseModel):
     description: Optional[str] = None
     unit_conversions: Optional[dict[str, float]] = None
     default_unit: Optional[str] = None
+    default_quantity: Optional[float] = None
     calories: Optional[float] = None
     protein: Optional[float] = None
     carbs: Optional[float] = None
@@ -674,6 +676,11 @@ async def log_meal_endpoint(request: LogMealRequest):
                                    timezone=request.timezone)
         db_ms = int((time.time() - db_start) * 1000)
 
+        # Update default_quantity for each item
+        for item in request.items:
+            storage.update_item_default_quantity(
+                item['item_id'], item.get('quantity', 1))
+
         # Log the meal logging event
         log_event('meal.log',
                   ms=db_ms,
@@ -731,6 +738,11 @@ async def log_meal_with_image(
                                    local_logged_at=local_logged_at,
                                    timezone=timezone)
         db_ms = int((time.time() - db_start) * 1000)
+
+        # Update default_quantity for each item
+        for item in items_list:
+            storage.update_item_default_quantity(
+                item['item_id'], item.get('quantity', 1))
 
         # Log the meal logging event
         log_event('meal.log',
@@ -1381,6 +1393,7 @@ async def create_item(request: ItemCreate):
         description=request.description,
         unit_conversions=request.unit_conversions,
         default_unit=request.default_unit,
+        default_quantity=request.default_quantity,
         calories=request.calories,
         protein=request.protein,
         carbs=request.carbs,
@@ -1483,6 +1496,8 @@ async def update_item(item_id: int, request: ItemUpdate):
         item.potassium = request.potassium
     if request.added_sugar is not None:
         item.added_sugar = request.added_sugar
+    if request.default_quantity is not None:
+        item.default_quantity = request.default_quantity
 
     get_storage().update_item(item)
     return item.to_dict()
