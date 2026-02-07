@@ -1223,6 +1223,119 @@ async def list_progress_photos():
     return {"dates": dates}
 
 
+@app.post("/api/progress-video/generate")
+def generate_progress_video():
+    """Generate a morphing progress video from first and last progress photos."""
+    from google.genai import types
+
+    storage = get_storage()
+
+    dates = storage.get_progress_photo_dates()
+    if len(dates) < 2:
+        raise HTTPException(status_code=400,
+                            detail="Need at least 2 progress photos to generate a video")
+
+    first_date = dates[-1]  # earliest
+    last_date = dates[0]    # most recent
+
+    first_image = storage.get_progress_photo(first_date)
+    last_image = storage.get_progress_photo(last_date)
+
+    if not first_image or not last_image:
+        raise HTTPException(status_code=404, detail="Could not retrieve progress photos")
+
+    client = get_genai_client()
+
+    start_time = time.time()
+    try:
+        operation = client.models.generate_videos(
+            model="veo-2.0-generate-001",
+            image=types.Image(image_bytes=first_image, mime_type="image/jpeg"),
+            config=types.GenerateVideosConfig(
+                last_frame=types.Image(image_bytes=last_image, mime_type="image/jpeg"),
+                person_generation="allow_adult",
+                aspect_ratio="9:16",
+            ),
+        )
+
+        timeout = 300
+        elapsed = 0
+        while not operation.done:
+            if elapsed >= timeout:
+                raise HTTPException(status_code=504,
+                                    detail="Video generation timed out after 5 minutes")
+            time.sleep(5)
+            elapsed += 5
+            operation = client.operations.get(operation)
+
+        if not operation.result or not operation.result.generated_videos:
+            raise HTTPException(status_code=500,
+                                detail="Video generation completed but produced no output")
+
+        video_bytes = operation.result.generated_videos[0].video.video_bytes
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500,
+                            detail=f"Video generation failed: {str(e)}")
+
+    model_ms = int((time.time() - start_time) * 1000)
+
+    video_id = storage.save_progress_video(video_bytes, first_date, last_date)
+
+    log_event('progress_video.generate',
+              ai_used=True,
+              model_name='veo-2.0-generate-001',
+              model_ms=model_ms,
+              first_date=first_date,
+              last_date=last_date,
+              video_size_bytes=len(video_bytes))
+
+    return {
+        "message": "Progress video generated",
+        "id": video_id,
+        "first_date": first_date,
+        "last_date": last_date,
+    }
+
+
+@app.get("/api/progress-video")
+async def get_progress_video():
+    """Get the progress video binary data for playback."""
+    video = get_storage().get_progress_video()
+    if not video:
+        raise HTTPException(status_code=404, detail="No progress video found")
+    return Response(content=video['video_data'], media_type="video/mp4")
+
+
+@app.get("/api/progress-video/info")
+async def get_progress_video_info():
+    """Check if a progress video exists and return its metadata."""
+    video = get_storage().get_progress_video()
+    if not video:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "id": video['id'],
+        "first_date": video['first_photo_date'],
+        "last_date": video['last_photo_date'],
+        "created_at": video['created_at'],
+    }
+
+
+@app.delete("/api/progress-video")
+async def delete_progress_video():
+    """Delete the progress video."""
+    db_start = time.time()
+    deleted = get_storage().delete_progress_video()
+    db_ms = int((time.time() - db_start) * 1000)
+    if deleted:
+        log_event('progress_video.delete', ms=db_ms)
+        return {"message": "Progress video deleted"}
+    raise HTTPException(status_code=404, detail="No progress video found")
+
+
 @app.get("/progression")
 async def progression_page():
     """Serve progression page."""

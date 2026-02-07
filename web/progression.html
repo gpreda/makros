@@ -47,6 +47,86 @@
         .back-btn:hover {
             background: #1a4a7a;
         }
+        .video-section {
+            margin-bottom: 30px;
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .video-section h2 {
+            color: #4ecca3;
+            font-size: 18px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+        .video-section video {
+            width: 100%;
+            max-width: 400px;
+            border-radius: 8px;
+            display: block;
+            margin: 0 auto 12px;
+        }
+        .video-meta {
+            text-align: center;
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+        .video-actions {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .generate-btn {
+            background: #4ecca3;
+            color: #0a0a23;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .generate-btn:hover {
+            background: #3db88c;
+        }
+        .generate-btn:disabled {
+            background: #2a5a4a;
+            color: #666;
+            cursor: not-allowed;
+        }
+        .delete-video-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .delete-video-btn:hover {
+            background: #c0392b;
+        }
+        .loading-spinner {
+            text-align: center;
+            padding: 20px;
+            color: #4ecca3;
+        }
+        .loading-spinner .spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 3px solid #333;
+            border-top-color: #4ecca3;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
         .photo-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -118,6 +198,10 @@
             <a href="/" class="back-btn">&larr; Back</a>
             <h1>Progression</h1>
         </div>
+        <div id="video-section" class="video-section" style="display:none;">
+            <h2>Progress Video</h2>
+            <div id="video-content"></div>
+        </div>
         <div id="photo-grid" class="photo-grid">
             <div class="empty">Loading...</div>
         </div>
@@ -129,6 +213,8 @@
     </div>
 
     <script>
+        let photoCount = 0;
+
         async function loadPhotos() {
             const grid = document.getElementById('photo-grid');
             try {
@@ -137,8 +223,12 @@
 
                 if (!data.dates || data.dates.length === 0) {
                     grid.innerHTML = '<div class="empty">No progress photos yet</div>';
+                    photoCount = 0;
+                    loadVideoSection();
                     return;
                 }
+
+                photoCount = data.dates.length;
 
                 grid.innerHTML = data.dates.map(dateStr => {
                     const d = new Date(dateStr + 'T00:00:00');
@@ -150,8 +240,98 @@
                         </div>
                     `;
                 }).join('');
+
+                loadVideoSection();
             } catch (e) {
                 grid.innerHTML = '<div class="empty">Failed to load photos</div>';
+            }
+        }
+
+        async function loadVideoSection() {
+            const section = document.getElementById('video-section');
+            const content = document.getElementById('video-content');
+
+            try {
+                const res = await fetch('/api/progress-video/info');
+                const info = await res.json();
+
+                if (info.exists) {
+                    const firstD = new Date(info.first_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    const lastD = new Date(info.last_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    const createdD = new Date(info.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+                    content.innerHTML = `
+                        <video controls playsinline>
+                            <source src="/api/progress-video" type="video/mp4">
+                            Your browser does not support video playback.
+                        </video>
+                        <div class="video-meta">${firstD} &rarr; ${lastD} &middot; Generated ${createdD}</div>
+                        <div class="video-actions">
+                            <button class="generate-btn" onclick="generateVideo()">Regenerate</button>
+                            <button class="delete-video-btn" onclick="deleteVideo()">Delete Video</button>
+                        </div>
+                    `;
+                    section.style.display = 'block';
+                } else if (photoCount >= 2) {
+                    content.innerHTML = `
+                        <div class="video-actions">
+                            <button class="generate-btn" onclick="generateVideo()">Generate Progress Video</button>
+                        </div>
+                    `;
+                    section.style.display = 'block';
+                } else {
+                    section.style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Failed to load video info:', e);
+                section.style.display = 'none';
+            }
+        }
+
+        async function generateVideo() {
+            const content = document.getElementById('video-content');
+
+            content.innerHTML = `
+                <div class="loading-spinner">
+                    <span class="spinner"></span>
+                    Generating progress video... This takes 1-2 minutes.
+                </div>
+            `;
+
+            try {
+                const res = await fetch('/api/progress-video/generate', {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(360000),
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Generation failed');
+                }
+
+                await loadVideoSection();
+            } catch (e) {
+                content.innerHTML = `
+                    <div class="loading-spinner" style="color: #e74c3c;">
+                        Failed to generate video: ${e.message}
+                    </div>
+                    <div class="video-actions" style="margin-top: 12px;">
+                        <button class="generate-btn" onclick="generateVideo()">Try Again</button>
+                    </div>
+                `;
+            }
+        }
+
+        async function deleteVideo() {
+            if (!confirm('Delete the progress video?')) return;
+
+            try {
+                const res = await fetch('/api/progress-video', { method: 'DELETE' });
+                if (res.ok) {
+                    await loadVideoSection();
+                }
+            } catch (e) {
+                alert('Failed to delete video');
             }
         }
 

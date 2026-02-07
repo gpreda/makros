@@ -613,6 +613,17 @@ class PostgresStorage:
                 ON progress_photos(date)
             """)
 
+            # Progress videos table (one video at a time)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS progress_videos (
+                    id SERIAL PRIMARY KEY,
+                    video_data BYTEA NOT NULL,
+                    first_photo_date DATE,
+                    last_photo_date DATE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -1438,6 +1449,52 @@ class PostgresStorage:
         with self.conn.cursor() as cur:
             cur.execute("SELECT date FROM progress_photos ORDER BY date DESC")
             return [str(row[0]) for row in cur.fetchall()]
+
+    # Progress video operations
+    def save_progress_video(self, video_data: bytes,
+                            first_photo_date: str, last_photo_date: str) -> int:
+        """Save a progress video, replacing any existing one. Returns the new video id."""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM progress_videos")
+                cur.execute("""
+                    INSERT INTO progress_videos (video_data, first_photo_date, last_photo_date)
+                    VALUES (%s, DATE(%s), DATE(%s))
+                    RETURNING id
+                """, (psycopg2.Binary(video_data), first_photo_date, last_photo_date))
+                video_id = cur.fetchone()[0]
+            self.conn.commit()
+            return video_id
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def get_progress_video(self) -> Optional[dict]:
+        """Get the progress video. Returns dict with video_data and metadata, or None."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, video_data, first_photo_date, last_photo_date, created_at
+                FROM progress_videos
+                ORDER BY created_at DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            if row:
+                return {
+                    'id': row['id'],
+                    'video_data': bytes(row['video_data']),
+                    'first_photo_date': str(row['first_photo_date']),
+                    'last_photo_date': str(row['last_photo_date']),
+                    'created_at': row['created_at'].isoformat(),
+                }
+        return None
+
+    def delete_progress_video(self) -> bool:
+        """Delete the progress video. Returns True if deleted."""
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM progress_videos")
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
 
     # Event logging (shared with tongue app)
     def log_event(self, event: str, user_id: str, session_id: str = None,
