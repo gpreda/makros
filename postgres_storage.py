@@ -130,16 +130,25 @@ class PostgresStorage:
                 ALTER TABLE items ADD COLUMN IF NOT EXISTS default_quantity REAL DEFAULT 0
             """)
             # Backfill default_quantity from most recent meal_items
+            # Use quantity column (post-migration name); fall back to amount for pre-migration schemas
             cur.execute("""
-                UPDATE items SET default_quantity = sub.quantity
-                FROM (
-                    SELECT DISTINCT ON (mi.item_id) mi.item_id, mi.amount as quantity
-                    FROM meal_items mi
-                    JOIN meals m ON mi.meal_id = m.id
-                    ORDER BY mi.item_id, m.logged_at DESC
-                ) sub
-                WHERE items.id = sub.item_id AND items.default_quantity = 0
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'meal_items' AND column_name IN ('quantity', 'amount')
+                ORDER BY column_name DESC LIMIT 1
             """)
+            qty_col = cur.fetchone()
+            if qty_col:
+                qty_col = qty_col[0]
+                cur.execute(f"""
+                    UPDATE items SET default_quantity = sub.qty
+                    FROM (
+                        SELECT DISTINCT ON (mi.item_id) mi.item_id, mi.{qty_col} as qty
+                        FROM meal_items mi
+                        JOIN meals m ON mi.meal_id = m.id
+                        ORDER BY mi.item_id, m.logged_at DESC
+                    ) sub
+                    WHERE items.id = sub.item_id AND items.default_quantity = 0
+                """)
 
             # Meals table (logged meals)
             cur.execute("""
