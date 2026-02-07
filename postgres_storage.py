@@ -683,22 +683,32 @@ class PostgresStorage:
         self.conn.commit()
         return deleted
 
-    def search_items(self, query: str, limit: int = 20) -> list[Item]:
+    def _item_order_clause(self, sort_by: str = 'name', sort_dir: str = 'asc') -> str:
+        """Build a safe ORDER BY clause for item queries."""
+        col = 'name' if sort_by not in ('name', 'created_at') else sort_by
+        direction = 'ASC' if sort_dir != 'desc' else 'DESC'
+        return f"ORDER BY {col} {direction}"
+
+    def search_items(self, query: str, limit: int = 20,
+                     sort_by: str = 'name', sort_dir: str = 'asc') -> list[Item]:
         """Search items by name (partial match), excluding obsolete."""
+        order = self._item_order_clause(sort_by, sort_dir)
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT * FROM items
                 WHERE LOWER(name) LIKE LOWER(%s)
                   AND (obsolete IS NOT TRUE)
-                ORDER BY name LIMIT %s
+                {order} LIMIT %s
             """, (f'%{query}%', limit))
             return [self._row_to_item(row) for row in cur.fetchall()]
 
-    def list_items(self, limit: int = 100, offset: int = 0) -> list[Item]:
+    def list_items(self, limit: int = 100, offset: int = 0,
+                   sort_by: str = 'name', sort_dir: str = 'asc') -> list[Item]:
         """List all non-obsolete items with pagination."""
+        order = self._item_order_clause(sort_by, sort_dir)
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT * FROM items WHERE obsolete IS NOT TRUE ORDER BY name LIMIT %s OFFSET %s",
+                f"SELECT * FROM items WHERE obsolete IS NOT TRUE {order} LIMIT %s OFFSET %s",
                 (limit, offset)
             )
             return [self._row_to_item(row) for row in cur.fetchall()]
@@ -744,6 +754,7 @@ class PostgresStorage:
             sodium=row.get('sodium'),
             potassium=row.get('potassium'),
             added_sugar=row.get('added_sugar'),
+            created_at=row['created_at'].isoformat() if row.get('created_at') else None,
         )
 
     # Meal operations

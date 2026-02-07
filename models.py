@@ -64,6 +64,7 @@ class Item:
     sodium: Optional[float] = None
     potassium: Optional[float] = None
     added_sugar: Optional[float] = None
+    created_at: Optional[str] = None
 
     def convert_to_grams(self, amount: float, unit: str) -> Optional[float]:
         """Convert an amount in the given unit to grams.
@@ -122,6 +123,7 @@ class Item:
             'sodium': self.sodium,
             'potassium': self.potassium,
             'added_sugar': self.added_sugar,
+            'created_at': self.created_at,
         }
 
     def get_nutrition(self, amount: float) -> dict:

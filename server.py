@@ -1231,13 +1231,14 @@ async def weight_page():
 
 # Item management endpoints
 @app.get("/api/items")
-async def list_items(limit: int = 100, offset: int = 0, search: Optional[str] = None):
+async def list_items(limit: int = 100, offset: int = 0, search: Optional[str] = None,
+                     sort_by: str = 'name', sort_dir: str = 'asc'):
     """List or search items."""
     storage = get_storage()
     if search:
-        items = storage.search_items(search, limit)
+        items = storage.search_items(search, limit, sort_by=sort_by, sort_dir=sort_dir)
     else:
-        items = storage.list_items(limit, offset)
+        items = storage.list_items(limit, offset, sort_by=sort_by, sort_dir=sort_dir)
     item_dicts = [i.to_dict() for i in items]
     # Add meal reference counts
     item_names = [i.name for i in items]
