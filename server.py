@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from google import genai
 
+import psycopg2
+
 from models import Item, VALID_UNITS
 from postgres_storage import PostgresStorage
 
@@ -198,6 +200,21 @@ def generate_smart_meal_name(items: list[dict], calorie_threshold: int = 20) -> 
 _user_sessions: dict[str, str] = {}
 DEFAULT_USER = "default"
 
+# Events DB connection (shared tongue database)
+EVENTS_DB_URL = os.environ.get(
+    'EVENTS_DATABASE_URL',
+    'postgresql://predator@localhost:5432/tongue'
+)
+_events_conn = None
+
+
+def get_events_conn():
+    """Get or create a connection to the events database (tongue)."""
+    global _events_conn
+    if _events_conn is None or _events_conn.closed:
+        _events_conn = psycopg2.connect(EVENTS_DB_URL)
+    return _events_conn
+
 
 def get_session_id(user_id: str = DEFAULT_USER) -> str:
     """Get or create a session ID for a user."""
@@ -209,13 +226,23 @@ def get_session_id(user_id: str = DEFAULT_USER) -> str:
 def log_event(event: str, user_id: str = DEFAULT_USER,
               ms: int = None, ai_used: bool = False, model_name: str = None,
               model_tokens: int = None, model_ms: int = None, **data) -> None:
-    """Log an event to the database."""
-    storage = get_storage()
-    if storage:
+    """Log an event to the tongue events database."""
+    try:
+        conn = get_events_conn()
         session_id = get_session_id(user_id)
-        storage.log_event(event, user_id, session_id,
-                          ms=ms, ai_used=ai_used, model_name=model_name,
-                          model_tokens=model_tokens, model_ms=model_ms, **data)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO events (app_name, event, user_id, session_id, ms,
+                                    ai_used, model_name, model_tokens, model_ms, data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, ("makros", event, user_id, session_id, ms,
+                  ai_used, model_name, model_tokens, model_ms,
+                  json.dumps(data) if data else None))
+        conn.commit()
+    except Exception as e:
+        print(f"Error logging event: {e}")
+        if _events_conn and not _events_conn.closed:
+            _events_conn.rollback()
 
 
 @app.on_event("startup")
@@ -230,6 +257,8 @@ async def shutdown():
     """Close storage on shutdown."""
     if _storage:
         get_storage().close()
+    if _events_conn and not _events_conn.closed:
+        _events_conn.close()
 
 
 # Mount static files
