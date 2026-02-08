@@ -150,6 +150,21 @@ class PostgresStorage:
                     WHERE items.id = sub.item_id AND items.default_quantity = 0
                 """)
 
+            # Add AI metadata columns to items
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'items' AND column_name = 'ai_generated'
+                    ) THEN
+                        ALTER TABLE items ADD COLUMN ai_generated BOOLEAN DEFAULT FALSE;
+                        ALTER TABLE items ADD COLUMN ai_model_name VARCHAR(100);
+                        ALTER TABLE items ADD COLUMN ai_response TEXT;
+                    END IF;
+                END $$;
+            """)
+
             # Meals table (logged meals)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS meals (
@@ -624,6 +639,19 @@ class PostgresStorage:
                 )
             """)
 
+            # Add debug_image_data column to progress_photos if missing
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'progress_photos' AND column_name = 'debug_image_data'
+                    ) THEN
+                        ALTER TABLE progress_photos ADD COLUMN debug_image_data BYTEA;
+                    END IF;
+                END $$;
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -640,8 +668,8 @@ class PostgresStorage:
                     INSERT INTO items (bar_code, name, description, unit_conversions,
                                        default_unit, calories, protein, carbs, fat, fiber, alcohol,
                                        saturated_fat, trans_fat, cholesterol, sodium, potassium, added_sugar,
-                                       default_quantity)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       default_quantity, ai_generated, ai_model_name, ai_response)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (item.bar_code, item.name, item.description,
                       json.dumps(item.unit_conversions), item.default_unit,
@@ -649,7 +677,8 @@ class PostgresStorage:
                       item.fiber, item.alcohol,
                       item.saturated_fat, item.trans_fat, item.cholesterol,
                       item.sodium, item.potassium, item.added_sugar,
-                      item.default_quantity))
+                      item.default_quantity, item.ai_generated, item.ai_model_name,
+                      item.ai_response))
                 item.id = cur.fetchone()[0]
             self.conn.commit()
             return item
@@ -804,6 +833,9 @@ class PostgresStorage:
             added_sugar=row.get('added_sugar'),
             created_at=row['created_at'].isoformat() if row.get('created_at') else None,
             default_quantity=row.get('default_quantity', 0) or 0,
+            ai_generated=row.get('ai_generated', False) or False,
+            ai_model_name=row.get('ai_model_name'),
+            ai_response=row.get('ai_response'),
         )
 
     # Meal operations
@@ -1043,12 +1075,23 @@ class PostgresStorage:
             self.conn.rollback()
             raise
 
-    # Conversion factors to a common base (grams for weight, ml for volume)
+    # Conversion factors between units in the same family
+    # Weight: g, kg, oz, lb  |  Volume: ml, l, fl_oz
+    # Item-dependent units (tbsp, tsp, cup, item, slice, serving) only convert to themselves
     UNIT_CONVERSIONS = {
-        'g': {'g': 1, 'oz': 1 / 28.3495},
-        'oz': {'oz': 1, 'g': 28.3495},
-        'fl_oz': {'fl_oz': 1},
+        'g': {'g': 1, 'kg': 0.001, 'oz': 1 / 28.3495, 'lb': 1 / 453.592},
+        'kg': {'kg': 1, 'g': 1000, 'oz': 1000 / 28.3495, 'lb': 1000 / 453.592},
+        'oz': {'oz': 1, 'g': 28.3495, 'kg': 0.0283495, 'lb': 1 / 16},
+        'lb': {'lb': 1, 'g': 453.592, 'kg': 0.453592, 'oz': 16},
+        'ml': {'ml': 1, 'l': 0.001, 'fl_oz': 1 / 29.5735},
+        'l': {'l': 1, 'ml': 1000, 'fl_oz': 1000 / 29.5735},
+        'fl_oz': {'fl_oz': 1, 'ml': 29.5735, 'l': 0.0295735},
+        'tbsp': {'tbsp': 1},
+        'tsp': {'tsp': 1},
+        'cup': {'cup': 1},
         'item': {'item': 1},
+        'slice': {'slice': 1},
+        'serving': {'serving': 1},
     }
 
     def update_meal_item_unit(self, item_id: int, new_unit: str) -> Optional[dict]:
@@ -1449,6 +1492,24 @@ class PostgresStorage:
         with self.conn.cursor() as cur:
             cur.execute("SELECT date FROM progress_photos ORDER BY date DESC")
             return [str(row[0]) for row in cur.fetchall()]
+
+    def save_debug_image(self, date, image_data: bytes) -> None:
+        """Save a debug overlay image for a progress photo date."""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE progress_photos SET debug_image_data = %s
+                WHERE date = DATE(%s)
+            """, (psycopg2.Binary(image_data), date))
+        self.conn.commit()
+
+    def get_debug_image(self, date) -> Optional[bytes]:
+        """Get debug overlay image for a specific date. Returns raw bytes or None."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT debug_image_data FROM progress_photos WHERE date = DATE(%s)", (date,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return bytes(row[0])
+        return None
 
     # Progress video operations
     def save_progress_video(self, video_data: bytes,

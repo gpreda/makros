@@ -332,7 +332,7 @@ def find_unique_name(storage, base_name: str) -> str:
     return name
 
 
-def process_analyzed_items(items: list[dict]) -> list[dict]:
+def process_analyzed_items(items: list[dict], model_name: str = None, ai_response_text: str = None) -> list[dict]:
     """Process analyzed items: check DB, save new items, handle duplicates.
     Returns items with item_id set for each."""
     storage = get_storage()
@@ -386,6 +386,9 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
                     sodium=new_macros['sodium'],
                     potassium=new_macros['potassium'],
                     added_sugar=new_macros['added_sugar'],
+                    ai_generated=True,
+                    ai_model_name=model_name,
+                    ai_response=ai_response_text,
                 )
                 try:
                     storage.add_item(new_item)
@@ -412,6 +415,9 @@ def process_analyzed_items(items: list[dict]) -> list[dict]:
                 sodium=new_macros['sodium'],
                 potassium=new_macros['potassium'],
                 added_sugar=new_macros['added_sugar'],
+                ai_generated=True,
+                ai_model_name=model_name,
+                ai_response=ai_response_text,
             )
             try:
                 storage.add_item(new_item)
@@ -451,7 +457,7 @@ IMPORTANT - Item granularity rules:
 For each item, provide:
 - name: item name (string) - use the product name for branded items
 - amount: numeric quantity (float) - use 1 for single items like burgers
-- unit: one of [{units_list}] - PREFER 'oz' for solid foods and 'fl_oz' for liquids/beverages. Use 'item' ONLY for inherently whole/countable foods like eggs, whole fruits (apple, banana, orange), whole vegetables (bell pepper, avocado), slices, or individually wrapped products. IMPORTANT: if the user specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g", "cheese 2 oz"), you MUST use that exact unit and amount
+- unit: one of [{units_list}] - PREFER 'oz' for solid foods and 'fl_oz' for liquids/beverages. Use 'item' ONLY for inherently countable foods with consistent size/calories: eggs, whole fruits (apple, banana, orange), slices, or individually wrapped products. Use 'oz' for whole foods that vary significantly in size and calories: potatoes, sweet potatoes, avocados, onions, carrots, beets, squash, etc. IMPORTANT: if the user specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g", "cheese 2 oz"), you MUST use that exact unit and amount
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -504,7 +510,7 @@ Return ONLY the dictionary, no other text or markdown.
         totals = result.get('totals', {})
 
         # Process items: check DB, save new items, handle name conflicts
-        processed_items = process_analyzed_items(items)
+        processed_items = process_analyzed_items(items, model_name=model_name, ai_response_text=text)
 
         # Log the analysis event with AI tracking
         log_event('meal.analyze',
@@ -575,7 +581,7 @@ FOR FOOD PHOTOS:
 For each item, provide:
 - name: item name (string)
 - amount: numeric quantity (float) - from label serving size or visual estimate
-- unit: one of [{units_list}] - PREFER 'oz' for solid foods and 'fl_oz' for liquids/beverages. Use 'item' ONLY for inherently whole/countable foods like eggs, whole fruits (apple, banana, orange), whole vegetables (bell pepper, avocado), slices, or individually wrapped products. IMPORTANT: if the user hint specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g"), you MUST use that exact unit and amount
+- unit: one of [{units_list}] - PREFER 'oz' for solid foods and 'fl_oz' for liquids/beverages. Use 'item' ONLY for inherently countable foods with consistent size/calories: eggs, whole fruits (apple, banana, orange), slices, or individually wrapped products. Use 'oz' for whole foods that vary significantly in size and calories: potatoes, sweet potatoes, avocados, onions, carrots, beets, squash, etc. IMPORTANT: if the user hint specifies a unit and amount (e.g. "latte 12 fl oz", "chicken breast 200g"), you MUST use that exact unit and amount
 - calories: kcal (int)
 - protein: grams (float)
 - carbs: grams (float)
@@ -647,7 +653,7 @@ Return ONLY the dictionary, no other text or markdown.
         totals = result.get('totals', {})
 
         # Process items: check DB, save new items, handle name conflicts
-        processed_items = process_analyzed_items(items)
+        processed_items = process_analyzed_items(items, model_name=model_name, ai_response_text=text)
 
         # Log the analysis event with AI tracking
         log_event('meal.analyze.image',
@@ -842,9 +848,8 @@ async def update_meal_item(item_id: int, request: UpdateMealItemRequest):
     """Update a meal item's quantity and/or unit."""
     if request.amount is not None and request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
-    valid_units = {'g', 'oz', 'fl_oz', 'item'}
-    if request.unit is not None and request.unit not in valid_units:
-        raise HTTPException(status_code=400, detail=f"Unit must be one of: {', '.join(valid_units)}")
+    if request.unit is not None and request.unit not in VALID_UNITS:
+        raise HTTPException(status_code=400, detail=f"Unit must be one of: {', '.join(sorted(VALID_UNITS))}")
 
     storage = get_storage()
     db_start = time.time()
@@ -1252,6 +1257,60 @@ async def list_progress_photos():
     return {"dates": dates}
 
 
+@app.post("/api/progress-photos/debug")
+def generate_debug_images():
+    """Generate debug overlay images for all progress photos."""
+    from morph_video import generate_debug_images as _generate_debug
+
+    storage = get_storage()
+    dates = storage.get_progress_photo_dates()
+    if len(dates) < 2:
+        raise HTTPException(status_code=400,
+                            detail="Need at least 2 progress photos")
+
+    # Load photos in chronological order (oldest first)
+    photo_dates = list(reversed(dates))
+    photos = []
+    for d in photo_dates:
+        img = storage.get_progress_photo(d)
+        if img:
+            photos.append(img)
+        else:
+            photo_dates.remove(d)
+
+    if len(photos) < 2:
+        raise HTTPException(status_code=404, detail="Could not retrieve progress photos")
+
+    start_time = time.time()
+    try:
+        debug_images = _generate_debug(photos)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Debug generation failed: {str(e)}")
+
+    gen_ms = int((time.time() - start_time) * 1000)
+
+    for date_str, debug_bytes in zip(photo_dates, debug_images):
+        storage.save_debug_image(date_str, debug_bytes)
+
+    return {"message": f"Generated {len(debug_images)} debug images", "ms": gen_ms}
+
+
+@app.get("/api/progress-photo/debug")
+async def get_debug_image(date: Optional[str] = None):
+    """Get the debug overlay image for a specific date."""
+    dt = date or datetime.now().strftime('%Y-%m-%d')
+    if date:
+        try:
+            dt = datetime.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format")
+
+    image_data = get_storage().get_debug_image(dt)
+    if not image_data:
+        raise HTTPException(status_code=404, detail="No debug image for this date")
+    return Response(content=image_data, media_type="image/jpeg")
+
+
 @app.post("/api/progress-video/generate")
 def generate_progress_video():
     """Generate a morphing progress video from progress photos using local landmark-based morphing."""
@@ -1402,7 +1461,7 @@ Respond with ONLY a Python dictionary in this exact format:
 {{
     'confidence': 0.95,  # Float 0-1: How confident you are this is a real food with known nutrition
     'recognized': True,  # Boolean: Is this a recognizable food item?
-    'recommended_unit': 'oz',  # 'oz' for solid foods, 'fl_oz' for liquids/beverages, 'item' ONLY for whole/countable foods (eggs, whole fruits, whole vegetables)
+    'recommended_unit': 'oz',  # 'oz' for solid foods, 'fl_oz' for liquids/beverages, 'item' ONLY for countable foods with consistent size (eggs, whole fruits)
     'per_100g': {{
         'calories': 250,
         'protein': 10.0,
@@ -1425,7 +1484,8 @@ Respond with ONLY a Python dictionary in this exact format:
 Guidelines:
 - recommended_unit should be 'oz' for most solid foods: burgers, sandwiches, meat, rice, pasta, cookies, vegetables, etc.
 - recommended_unit should be 'fl_oz' for liquids and beverages: milk, juice, coffee, soup, etc.
-- recommended_unit should be 'item' ONLY for inherently whole/countable foods: eggs, whole fruits (apple, banana, orange), whole vegetables (bell pepper, avocado), slices
+- recommended_unit should be 'item' ONLY for inherently countable foods with consistent size/calories: eggs, whole fruits (apple, banana, orange), slices
+- recommended_unit should be 'oz' for whole foods that vary significantly in size and calories: potatoes, sweet potatoes, avocados, onions, carrots, beets, squash, etc.
 - per_item should be None for bulk foods that don't have a standard piece size
 - Confidence 0.9-1.0: Common foods, 0.7-0.9: Less common, 0.4-0.7: Vague, 0.0-0.4: Unknown
 

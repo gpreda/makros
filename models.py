@@ -66,6 +66,9 @@ class Item:
     added_sugar: Optional[float] = None
     created_at: Optional[str] = None
     default_quantity: float = 0
+    ai_generated: bool = False
+    ai_model_name: Optional[str] = None
+    ai_response: Optional[str] = None
 
     def convert_to_grams(self, amount: float, unit: str) -> Optional[float]:
         """Convert an amount in the given unit to grams.
@@ -126,6 +129,9 @@ class Item:
             'added_sugar': self.added_sugar,
             'created_at': self.created_at,
             'default_quantity': self.default_quantity,
+            'ai_generated': self.ai_generated,
+            'ai_model_name': self.ai_model_name,
+            'ai_response': self.ai_response,
         }
 
     def get_nutrition(self, amount: float) -> dict:
@@ -168,4 +174,7 @@ class Item:
             potassium=data.get('potassium'),
             added_sugar=data.get('added_sugar'),
             default_quantity=data.get('default_quantity', 0),
+            ai_generated=data.get('ai_generated', False),
+            ai_model_name=data.get('ai_model_name'),
+            ai_response=data.get('ai_response'),
         )

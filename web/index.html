@@ -1470,9 +1470,18 @@
                                    min="0.1" step="0.1" onchange="updateBreakdownItem(this)">
                             <select class="breakdown-unit" data-item-id="${item.id}" onchange="updateItemUnit(this)">
                                 <option value="g"${item.unit === 'g' ? ' selected' : ''}>g</option>
+                                <option value="kg"${item.unit === 'kg' ? ' selected' : ''}>kg</option>
                                 <option value="oz"${item.unit === 'oz' ? ' selected' : ''}>oz</option>
+                                <option value="lb"${item.unit === 'lb' ? ' selected' : ''}>lb</option>
+                                <option value="ml"${item.unit === 'ml' ? ' selected' : ''}>ml</option>
+                                <option value="l"${item.unit === 'l' ? ' selected' : ''}>l</option>
                                 <option value="fl_oz"${item.unit === 'fl_oz' ? ' selected' : ''}>fl oz</option>
+                                <option value="tbsp"${item.unit === 'tbsp' ? ' selected' : ''}>tbsp</option>
+                                <option value="tsp"${item.unit === 'tsp' ? ' selected' : ''}>tsp</option>
+                                <option value="cup"${item.unit === 'cup' ? ' selected' : ''}>cup</option>
                                 <option value="item"${item.unit === 'item' ? ' selected' : ''}>item</option>
+                                <option value="slice"${item.unit === 'slice' ? ' selected' : ''}>slice</option>
+                                <option value="serving"${item.unit === 'serving' ? ' selected' : ''}>serving</option>
                             </select>
                         </td>
                         <td class="cal-cell">${item.calories || 0}</td>
