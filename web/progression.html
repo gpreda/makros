@@ -294,7 +294,7 @@
             content.innerHTML = `
                 <div class="loading-spinner">
                     <span class="spinner"></span>
-                    Generating progress video... This takes 1-2 minutes.
+                    Generating progress video... This takes a few seconds.
                 </div>
             `;
 
@@ -305,8 +305,10 @@
                 });
 
                 if (!res.ok) {
-                    const err = await res.json();
-                    throw new Error(err.detail || 'Generation failed');
+                    const text = await res.text();
+                    let msg = text || 'Generation failed';
+                    try { msg = JSON.parse(text).detail || msg; } catch {}
+                    throw new Error(msg);
                 }
 
                 await loadVideoSection();

@@ -1225,8 +1225,8 @@ async def list_progress_photos():
 
 @app.post("/api/progress-video/generate")
 def generate_progress_video():
-    """Generate a morphing progress video from first and last progress photos."""
-    from google.genai import types
+    """Generate a morphing progress video from progress photos using local landmark-based morphing."""
+    from morph_video import generate_progress_morph_video
 
     storage = get_storage()
 
@@ -1238,58 +1238,37 @@ def generate_progress_video():
     first_date = dates[-1]  # earliest
     last_date = dates[0]    # most recent
 
-    first_image = storage.get_progress_photo(first_date)
-    last_image = storage.get_progress_photo(last_date)
+    # Load all photos in chronological order (oldest first)
+    photo_dates = list(reversed(dates))
+    photos = []
+    for d in photo_dates:
+        img = storage.get_progress_photo(d)
+        if img:
+            photos.append(img)
 
-    if not first_image or not last_image:
+    if len(photos) < 2:
         raise HTTPException(status_code=404, detail="Could not retrieve progress photos")
-
-    client = get_genai_client()
 
     start_time = time.time()
     try:
-        operation = client.models.generate_videos(
-            model="veo-2.0-generate-001",
-            image=types.Image(image_bytes=first_image, mime_type="image/jpeg"),
-            config=types.GenerateVideosConfig(
-                last_frame=types.Image(image_bytes=last_image, mime_type="image/jpeg"),
-                person_generation="allow_adult",
-                aspect_ratio="9:16",
-            ),
-        )
-
-        timeout = 300
-        elapsed = 0
-        while not operation.done:
-            if elapsed >= timeout:
-                raise HTTPException(status_code=504,
-                                    detail="Video generation timed out after 5 minutes")
-            time.sleep(5)
-            elapsed += 5
-            operation = client.operations.get(operation)
-
-        if not operation.result or not operation.result.generated_videos:
-            raise HTTPException(status_code=500,
-                                detail="Video generation completed but produced no output")
-
-        video_bytes = operation.result.generated_videos[0].video.video_bytes
-
-    except HTTPException:
-        raise
+        video_bytes = generate_progress_morph_video(photos)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500,
                             detail=f"Video generation failed: {str(e)}")
 
-    model_ms = int((time.time() - start_time) * 1000)
+    gen_ms = int((time.time() - start_time) * 1000)
 
     video_id = storage.save_progress_video(video_bytes, first_date, last_date)
 
     log_event('progress_video.generate',
-              ai_used=True,
-              model_name='veo-2.0-generate-001',
-              model_ms=model_ms,
+              ai_used=False,
+              model_name=None,
+              model_ms=gen_ms,
               first_date=first_date,
               last_date=last_date,
+              num_photos=len(photos),
               video_size_bytes=len(video_bytes))
 
     return {
