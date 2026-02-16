@@ -814,6 +814,13 @@ class PostgresStorage:
             """, ([n.lower() for n in item_names],))
             return {row['lname']: row['meal_count'] for row in cur.fetchall()}
 
+    def is_item_obsolete(self, item_id: int) -> bool:
+        """Check if an item is marked obsolete."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT obsolete FROM items WHERE id = %s", (item_id,))
+            row = cur.fetchone()
+            return bool(row and row[0])
+
     def _row_to_item(self, row: dict) -> Item:
         """Convert database row to Item object."""
         return Item(

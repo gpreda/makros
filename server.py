@@ -1646,6 +1646,16 @@ async def rename_item(item_id: int, request: RenameItemRequest):
     item = storage.get_item_by_id(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+    # If an obsolete item has this name, rename it first to free the name
+    conflicting = storage.get_item_by_name(new_name)
+    if conflicting and conflicting.id != item_id:
+        if storage.is_item_obsolete(conflicting.id):
+            unique_name = find_unique_name(storage, new_name)
+            conflicting.name = unique_name
+            storage.update_item(conflicting)
+        else:
+            raise HTTPException(status_code=409, detail="An item with this name already exists")
+
     item.name = new_name
     try:
         storage.update_item(item)
