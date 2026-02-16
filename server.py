@@ -489,12 +489,15 @@ Return ONLY the dictionary, no other text or markdown.
 """
 
     model_name = 'gemini-2.0-flash'
-    start_time = time.time()
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt
-    )
-    model_ms = int((time.time() - start_time) * 1000)
+    try:
+        start_time = time.time()
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
+        model_ms = int((time.time() - start_time) * 1000)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI model error: {e}")
 
     text = response.text.strip()
     text = text.replace('```python', '').replace('```json', '').replace('```', '').strip()
@@ -527,7 +530,16 @@ Return ONLY the dictionary, no other text or markdown.
             totals=totals,
             meal_name=result.get('meal_name')
         )
-    except (SyntaxError, ValueError) as e:
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_event('meal.analyze.parse_error',
+                  ai_used=True,
+                  model_name=model_name,
+                  model_tokens=model_tokens,
+                  model_ms=model_ms,
+                  error=str(e),
+                  raw_response=text)
         raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {e}")
 
 
@@ -612,7 +624,6 @@ Return ONLY the dictionary, no other text or markdown.
 """
 
     model_name = 'gemini-2.0-flash'
-    start_time = time.time()
 
     # Create the image part for Gemini
     image_part = {
@@ -622,11 +633,15 @@ Return ONLY the dictionary, no other text or markdown.
         }
     }
 
-    response = client.models.generate_content(
-        model=model_name,
-        contents=[image_part, prompt]
-    )
-    model_ms = int((time.time() - start_time) * 1000)
+    try:
+        start_time = time.time()
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[image_part, prompt]
+        )
+        model_ms = int((time.time() - start_time) * 1000)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI model error: {e}")
 
     text = response.text.strip()
     text = text.replace('```python', '').replace('```json', '').replace('```', '').strip()
@@ -1694,6 +1709,45 @@ async def delete_item(item_id: int):
         log_event('item.delete', ms=db_ms, item_id=item_id)
         return {"message": "Item deleted"}
     raise HTTPException(status_code=404, detail="Item not found")
+
+
+class GroupItemsRequest(BaseModel):
+    default_item_id: int
+    item_ids: list[int]
+
+
+@app.post("/api/items/group")
+async def group_items(request: GroupItemsRequest):
+    """Group duplicate items: merge meal references to the default item, mark others obsolete."""
+    if len(request.item_ids) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 items to group")
+    if request.default_item_id not in request.item_ids:
+        raise HTTPException(status_code=400, detail="Default item must be in the item_ids list")
+
+    storage = get_storage()
+
+    # Validate all items exist
+    for item_id in request.item_ids:
+        item = storage.get_item_by_id(item_id)
+        if not item:
+            raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+
+    obsolete_ids = [i for i in request.item_ids if i != request.default_item_id]
+
+    db_start = time.time()
+    updated_count = storage.group_items(request.default_item_id, obsolete_ids)
+    db_ms = int((time.time() - db_start) * 1000)
+
+    log_event('items.group',
+              ms=db_ms,
+              default_item_id=request.default_item_id,
+              obsolete_item_ids=obsolete_ids,
+              meals_updated=updated_count)
+
+    return {
+        "message": f"Grouped {len(obsolete_ids)} items into default",
+        "meals_updated": updated_count,
+    }
 
 
 @app.get("/api/items/barcode/{barcode}")

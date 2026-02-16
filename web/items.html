@@ -264,6 +264,53 @@
             background: #ff4757;
             color: white;
         }
+        .check-cell {
+            width: 36px;
+            text-align: center;
+        }
+        .check-cell input[type="checkbox"],
+        .check-cell input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: #4ecca3;
+        }
+        .group-fab {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #4ecca3;
+            color: #1a1a2e;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 16px rgba(78,204,163,0.4);
+            z-index: 100;
+            display: none;
+        }
+        .group-fab:hover {
+            background: #3db892;
+        }
+        .group-view {
+            display: none;
+        }
+        .group-view.show {
+            display: block;
+        }
+        .group-view table {
+            margin-bottom: 20px;
+        }
+        .group-view .selected-default {
+            background: #0f3460;
+        }
+        .group-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
         .loading {
             text-align: center;
             padding: 40px;
@@ -390,12 +437,24 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" id="items-card">
             <div id="items-content">
                 <div class="loading">Loading items...</div>
             </div>
             <div class="pagination" id="pagination"></div>
         </div>
+
+        <div class="card group-view" id="group-view">
+            <h2>Group Duplicate Items</h2>
+            <p style="color:#888;margin-bottom:15px;">Select which item to keep as the default. All meal references from the other items will be merged into it.</p>
+            <div id="group-content"></div>
+            <div class="group-actions">
+                <button class="btn" id="commit-group-btn" onclick="commitGroup()">Commit Group</button>
+                <button class="btn btn-secondary" onclick="cancelGroup()">Cancel</button>
+            </div>
+        </div>
+
+        <button class="group-fab" id="group-fab" onclick="showGroupView()">Group (<span id="group-count">0</span>)</button>
     </div>
 
     <script>
@@ -408,6 +467,10 @@
 
         let currentItemName = '';
         let currentSuggestion = null;
+
+        // Selection state for grouping
+        const selectedItems = new Map(); // id -> item object
+        let groupDefaultId = null;
 
         async function startAddItem() {
             const name = document.getElementById('search-input').value.trim();
@@ -621,8 +684,17 @@
         function renderItems(items) {
             const content = document.getElementById('items-content');
 
+            // Store items in a lookup for selection
+            window._itemsLookup = window._itemsLookup || {};
+            items.forEach(item => { window._itemsLookup[item.id] = item; });
+
             const rows = items.map(item => `
                 <tr>
+                    <td class="check-cell">
+                        <input type="checkbox" data-item-id="${item.id}"
+                            ${selectedItems.has(item.id) ? 'checked' : ''}
+                            onchange="toggleSelectItem(${item.id}, this.checked)">
+                    </td>
                     <td>
                         <div class="item-name">${escapeHtml(item.name)}</div>
                         ${item.description ? `<div class="item-desc">${escapeHtml(item.description)}</div>` : ''}
@@ -653,6 +725,7 @@
                 <table>
                     <thead>
                         <tr>
+                            <th class="check-cell"></th>
                             <th class="sortable" onclick="toggleSort('name')">Item${sortArrow('name')}</th>
                             <th>Unit</th>
                             <th>Qty</th>
@@ -670,6 +743,120 @@
                     <tbody>${rows}</tbody>
                 </table>
             `;
+        }
+
+        function toggleSelectItem(id, checked) {
+            if (checked) {
+                selectedItems.set(id, window._itemsLookup[id]);
+            } else {
+                selectedItems.delete(id);
+            }
+            updateGroupFab();
+        }
+
+        function updateGroupFab() {
+            const fab = document.getElementById('group-fab');
+            const count = selectedItems.size;
+            document.getElementById('group-count').textContent = count;
+            fab.style.display = count >= 2 ? 'block' : 'none';
+        }
+
+        function showGroupView() {
+            const items = Array.from(selectedItems.values());
+            // Default to the item with the most meals
+            const sorted = [...items].sort((a, b) => (b.meal_count || 0) - (a.meal_count || 0));
+            groupDefaultId = sorted[0].id;
+
+            const rows = sorted.map(item => `
+                <tr class="${item.id === groupDefaultId ? 'selected-default' : ''}">
+                    <td class="check-cell">
+                        <input type="radio" name="group-default" value="${item.id}"
+                            ${item.id === groupDefaultId ? 'checked' : ''}
+                            onchange="groupDefaultId = ${item.id}; renderGroupView();">
+                    </td>
+                    <td><div class="item-name">${escapeHtml(item.name)}</div></td>
+                    <td><span class="unit-badge">${item.default_unit || 'item'}</span></td>
+                    <td class="nutrition-cell">${Math.round(item.calories || 0)}</td>
+                    <td class="nutrition-cell">${(item.protein || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${(item.carbs || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${(item.fat || 0).toFixed(1)}</td>
+                    <td class="nutrition-cell">${item.meal_count || 0}</td>
+                </tr>
+            `).join('');
+
+            document.getElementById('group-content').innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="check-cell">Default</th>
+                            <th>Item</th>
+                            <th>Unit</th>
+                            <th>Kcal</th>
+                            <th>Protein</th>
+                            <th>Carbs</th>
+                            <th>Fat</th>
+                            <th>Meals</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+
+            document.getElementById('items-card').style.display = 'none';
+            document.getElementById('group-fab').style.display = 'none';
+            document.getElementById('group-view').classList.add('show');
+        }
+
+        function renderGroupView() {
+            showGroupView();
+        }
+
+        function cancelGroup() {
+            document.getElementById('group-view').classList.remove('show');
+            document.getElementById('items-card').style.display = '';
+            updateGroupFab();
+        }
+
+        async function commitGroup() {
+            if (!groupDefaultId) {
+                alert('Select a default item first');
+                return;
+            }
+
+            const itemIds = Array.from(selectedItems.keys());
+            const btn = document.getElementById('commit-group-btn');
+            btn.disabled = true;
+            btn.textContent = 'Grouping...';
+
+            try {
+                const res = await fetch('/api/items/group', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        default_item_id: groupDefaultId,
+                        item_ids: itemIds
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Failed to group items');
+                }
+
+                const data = await res.json();
+                alert(`Grouped successfully! ${data.meals_updated} meal reference(s) updated.`);
+
+                // Reset state
+                selectedItems.clear();
+                groupDefaultId = null;
+                cancelGroup();
+                loadItems(currentOffset, currentSearch);
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Commit Group';
+            }
         }
 
         function updatePagination() {

@@ -1557,3 +1557,62 @@ class PostgresStorage:
         self.conn.commit()
         return deleted
 
+    def group_items(self, default_item_id: int, obsolete_item_ids: list[int]) -> int:
+        """Merge meal_items from obsolete items into the default item, preserving calories.
+
+        For each meal_item referencing an obsolete item:
+          - Compute total_calories = old_item.calories * meal_item.quantity
+          - Compute new_quantity = total_calories / default_item.calories
+          - Update meal_item to reference default_item with new_quantity
+        Then mark obsolete items as obsolete=TRUE.
+
+        Returns the number of meal_items updated.
+        """
+        try:
+            updated_count = 0
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Get default item's calories
+                cur.execute("SELECT calories FROM items WHERE id = %s", (default_item_id,))
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError(f"Default item {default_item_id} not found")
+                default_calories = row['calories'] or 0
+
+                for obs_id in obsolete_item_ids:
+                    # Get obsolete item's calories
+                    cur.execute("SELECT calories FROM items WHERE id = %s", (obs_id,))
+                    obs_row = cur.fetchone()
+                    if not obs_row:
+                        continue
+                    obs_calories = obs_row['calories'] or 0
+
+                    # Find all meal_items referencing the obsolete item
+                    cur.execute(
+                        "SELECT id, quantity FROM meal_items WHERE item_id = %s",
+                        (obs_id,))
+                    meal_items = cur.fetchall()
+
+                    for mi in meal_items:
+                        old_quantity = mi['quantity'] or 0
+                        total_cal = obs_calories * old_quantity
+                        if default_calories > 0:
+                            new_quantity = total_cal / default_calories
+                        else:
+                            new_quantity = old_quantity
+
+                        cur.execute(
+                            "UPDATE meal_items SET item_id = %s, quantity = %s WHERE id = %s",
+                            (default_item_id, new_quantity, mi['id']))
+                        updated_count += 1
+
+                    # Mark obsolete item
+                    cur.execute(
+                        "UPDATE items SET obsolete = TRUE WHERE id = %s",
+                        (obs_id,))
+
+            self.conn.commit()
+            return updated_count
+        except Exception:
+            self.conn.rollback()
+            raise
+
