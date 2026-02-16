@@ -763,9 +763,11 @@
 
         function showGroupView() {
             const items = Array.from(selectedItems.values());
-            // Default to the item with the most meals
+            // Default to the item with the most meals, but preserve existing selection
             const sorted = [...items].sort((a, b) => (b.meal_count || 0) - (a.meal_count || 0));
-            groupDefaultId = sorted[0].id;
+            if (!groupDefaultId || !selectedItems.has(groupDefaultId)) {
+                groupDefaultId = sorted[0].id;
+            }
 
             const rows = sorted.map(item => `
                 <tr class="${item.id === groupDefaultId ? 'selected-default' : ''}">
