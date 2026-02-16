@@ -720,29 +720,33 @@ class PostgresStorage:
         """Update an existing item. Returns True if updated."""
         if item.id is None:
             return False
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                UPDATE items
-                SET bar_code = %s, name = %s, description = %s,
-                    unit_conversions = %s, default_unit = %s,
-                    calories = %s, protein = %s, carbs = %s,
-                    fat = %s, fiber = %s, alcohol = %s,
-                    saturated_fat = %s, trans_fat = %s, cholesterol = %s,
-                    sodium = %s, potassium = %s, added_sugar = %s,
-                    default_quantity = %s,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-            """, (item.bar_code, item.name, item.description,
-                  json.dumps(item.unit_conversions), item.default_unit,
-                  item.calories, item.protein, item.carbs, item.fat,
-                  item.fiber, item.alcohol,
-                  item.saturated_fat, item.trans_fat, item.cholesterol,
-                  item.sodium, item.potassium, item.added_sugar,
-                  item.default_quantity,
-                  item.id))
-            updated = cur.rowcount > 0
-        self.conn.commit()
-        return updated
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE items
+                    SET bar_code = %s, name = %s, description = %s,
+                        unit_conversions = %s, default_unit = %s,
+                        calories = %s, protein = %s, carbs = %s,
+                        fat = %s, fiber = %s, alcohol = %s,
+                        saturated_fat = %s, trans_fat = %s, cholesterol = %s,
+                        sodium = %s, potassium = %s, added_sugar = %s,
+                        default_quantity = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (item.bar_code, item.name, item.description,
+                      json.dumps(item.unit_conversions), item.default_unit,
+                      item.calories, item.protein, item.carbs, item.fat,
+                      item.fiber, item.alcohol,
+                      item.saturated_fat, item.trans_fat, item.cholesterol,
+                      item.sodium, item.potassium, item.added_sugar,
+                      item.default_quantity,
+                      item.id))
+                updated = cur.rowcount > 0
+            self.conn.commit()
+            return updated
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def update_item_default_quantity(self, item_id: int, quantity: float) -> None:
         """Update an item's default_quantity."""
