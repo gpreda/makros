@@ -207,6 +207,24 @@
         }
         .item-name {
             font-weight: 600;
+            cursor: pointer;
+        }
+        .item-name:hover {
+            color: #4ecca3;
+        }
+        .item-name-input {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+            padding: 4px 6px;
+            font-size: inherit;
+            font-weight: 600;
+            font-family: inherit;
+            width: 100%;
+        }
+        .item-name-input:focus {
+            outline: none;
         }
         .item-desc {
             font-size: 12px;
@@ -696,7 +714,7 @@
                             onchange="toggleSelectItem(${item.id}, this.checked)">
                     </td>
                     <td>
-                        <div class="item-name">${escapeHtml(item.name)}</div>
+                        <div class="item-name" onclick="startRename(${item.id}, this)">${escapeHtml(item.name)}</div>
                         ${item.description ? `<div class="item-desc">${escapeHtml(item.description)}</div>` : ''}
                         ${item.bar_code ? `<div class="item-barcode">${escapeHtml(item.bar_code)}</div>` : ''}
                     </td>
@@ -752,6 +770,60 @@
                 selectedItems.delete(id);
             }
             updateGroupFab();
+        }
+
+        function startRename(id, el) {
+            const currentName = el.textContent;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'item-name-input';
+            input.value = currentName;
+            el.replaceWith(input);
+            input.focus();
+            input.select();
+
+            let saved = false;
+            async function save() {
+                if (saved) return;
+                saved = true;
+                const newName = input.value.trim();
+                if (!newName || newName === currentName) {
+                    // Revert
+                    const div = document.createElement('div');
+                    div.className = 'item-name';
+                    div.textContent = currentName;
+                    div.onclick = () => startRename(id, div);
+                    input.replaceWith(div);
+                    return;
+                }
+                try {
+                    const res = await fetch(`/api/items/${id}/name`, {
+                        method: 'PATCH',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ name: newName })
+                    });
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || 'Rename failed');
+                    }
+                    const div = document.createElement('div');
+                    div.className = 'item-name';
+                    div.textContent = newName;
+                    div.onclick = () => startRename(id, div);
+                    input.replaceWith(div);
+                    // Update lookup
+                    if (window._itemsLookup[id]) window._itemsLookup[id].name = newName;
+                } catch (e) {
+                    alert(e.message);
+                    saved = false;
+                }
+            }
+
+            input.addEventListener('blur', save);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { saved = true; const div = document.createElement('div'); div.className = 'item-name'; div.textContent = currentName; div.onclick = () => startRename(id, div); input.replaceWith(div); }
+            });
         }
 
         function updateGroupFab() {
