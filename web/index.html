@@ -1801,8 +1801,10 @@
                 }
 
                 if (!res.ok) {
-                    const errData = await res.json().catch(() => ({}));
-                    throw new Error(errData.detail || 'Analysis failed');
+                    const errText = await res.text().catch(() => '');
+                    let detail = `Analysis failed (${res.status})`;
+                    try { detail = JSON.parse(errText).detail || detail; } catch {}
+                    throw new Error(detail);
                 }
 
                 const data = await res.json();
@@ -1861,8 +1863,10 @@
                 }
 
                 if (!res.ok) {
-                    const errData = await res.json().catch(() => ({}));
-                    throw new Error(errData.detail || 'Analysis failed');
+                    const errText = await res.text().catch(() => '');
+                    let detail = `Analysis failed (${res.status})`;
+                    try { detail = JSON.parse(errText).detail || detail; } catch {}
+                    throw new Error(detail);
                 }
 
                 const data = await res.json();

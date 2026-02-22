@@ -143,15 +143,35 @@
         }
         .photo-card img {
             width: 100%;
-            aspect-ratio: 1;
+            aspect-ratio: 9/16;
             object-fit: cover;
             display: block;
+        }
+        .photo-card .debug-img {
+            border-top: 2px solid #4ecca3;
         }
         .photo-card .date-label {
             padding: 8px;
             text-align: center;
             font-size: 13px;
             color: #888;
+        }
+        .debug-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #4ecca3;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .debug-btn:hover {
+            background: #1a4a7a;
+        }
+        .debug-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         .empty {
             text-align: center;
@@ -202,6 +222,10 @@
             <h2>Progress Video</h2>
             <div id="video-content"></div>
         </div>
+        <div id="debug-section" style="text-align:center; margin-bottom:20px; display:none;">
+            <button class="debug-btn" onclick="generateDebug()">Generate Debug Images</button>
+            <span id="debug-status" style="margin-left:12px; color:#888; font-size:13px;"></span>
+        </div>
         <div id="photo-grid" class="photo-grid">
             <div class="empty">Loading...</div>
         </div>
@@ -214,6 +238,8 @@
 
     <script>
         let photoCount = 0;
+        let photoDates = [];
+        let showDebug = false;
 
         async function loadPhotos() {
             const grid = document.getElementById('photo-grid');
@@ -224,26 +250,69 @@
                 if (!data.dates || data.dates.length === 0) {
                     grid.innerHTML = '<div class="empty">No progress photos yet</div>';
                     photoCount = 0;
+                    document.getElementById('debug-section').style.display = 'none';
                     loadVideoSection();
                     return;
                 }
 
                 photoCount = data.dates.length;
+                photoDates = data.dates;
 
-                grid.innerHTML = data.dates.map(dateStr => {
-                    const d = new Date(dateStr + 'T00:00:00');
-                    const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-                    return `
-                        <div class="photo-card" onclick="viewPhoto('${dateStr}')">
-                            <img src="/api/progress-photo?date=${dateStr}" alt="${label}" loading="lazy">
-                            <div class="date-label">${label}</div>
-                        </div>
-                    `;
-                }).join('');
+                if (photoCount >= 2) {
+                    document.getElementById('debug-section').style.display = 'block';
+                }
 
+                renderGrid();
                 loadVideoSection();
             } catch (e) {
                 grid.innerHTML = '<div class="empty">Failed to load photos</div>';
+            }
+        }
+
+        function renderGrid() {
+            const grid = document.getElementById('photo-grid');
+            const cacheBuster = showDebug ? `&_t=${Date.now()}` : '';
+            grid.innerHTML = photoDates.map(dateStr => {
+                const d = new Date(dateStr + 'T00:00:00');
+                const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                const debugImg = showDebug
+                    ? `<img class="debug-img" src="/api/progress-photo/debug?date=${dateStr}${cacheBuster}" alt="Debug ${label}" loading="lazy" onclick="viewPhoto('${dateStr}', true)" onerror="this.style.display='none'">`
+                    : '';
+                return `
+                    <div class="photo-card">
+                        <img src="/api/progress-photo?date=${dateStr}" alt="${label}" loading="lazy" onclick="viewPhoto('${dateStr}')">
+                        ${debugImg}
+                        <div class="date-label">${label}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function generateDebug() {
+            const btn = document.querySelector('.debug-btn');
+            const status = document.getElementById('debug-status');
+            btn.disabled = true;
+            status.textContent = 'Generating...';
+
+            try {
+                const res = await fetch('/api/progress-photos/debug', {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(120000),
+                });
+                if (!res.ok) {
+                    const text = await res.text();
+                    let msg = text;
+                    try { msg = JSON.parse(text).detail || msg; } catch {}
+                    throw new Error(msg);
+                }
+                const data = await res.json();
+                status.textContent = `Done (${data.ms}ms)`;
+                showDebug = true;
+                renderGrid();
+            } catch (e) {
+                status.textContent = `Failed: ${e.message}`;
+            } finally {
+                btn.disabled = false;
             }
         }
 
@@ -337,10 +406,12 @@
             }
         }
 
-        function viewPhoto(dateStr) {
+        function viewPhoto(dateStr, debug = false) {
             const modal = document.getElementById('image-modal');
             const img = document.getElementById('modal-image');
-            img.src = `/api/progress-photo?date=${dateStr}`;
+            img.src = debug
+                ? `/api/progress-photo/debug?date=${dateStr}`
+                : `/api/progress-photo?date=${dateStr}`;
             modal.classList.add('active');
         }
 

@@ -569,14 +569,15 @@
                 datasets.push({
                     label: '7-Day Avg Weight (lbs)',
                     data: rollingAvgWeight,
-                    borderColor: '#4ecca3',
-                    backgroundColor: 'rgba(78, 204, 163, 0.1)',
+                    borderColor: '#1a73e8',
+                    backgroundColor: 'transparent',
                     borderWidth: 3,
-                    fill: true,
+                    borderDash: [6, 4],
+                    fill: false,
                     tension: 0.4,
                     pointRadius: 0,
                     pointHoverRadius: 5,
-                    pointBackgroundColor: '#4ecca3',
+                    pointBackgroundColor: '#1a73e8',
                     yAxisID: 'y1',
                 });
             }
