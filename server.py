@@ -10,14 +10,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from google import genai
 
 import psycopg2
 
+from auth import router as auth_router
 from models import Item, VALID_UNITS
 from postgres_storage import PostgresStorage
 
@@ -86,6 +89,27 @@ class ItemUpdate(BaseModel):
 
 # Initialize app
 app = FastAPI(title="Makros API", description="Macro nutrition tracking API")
+
+SESSION_SECRET_KEY = os.environ.get('SESSION_SECRET_KEY', 'change-me-insecure-default')
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    """Block unauthenticated requests: 401 for API routes, redirect for HTML routes."""
+    PUBLIC_PATHS = {"/login", "/auth/callback", "/logout", "/favicon.ico"}
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith("/static"):
+        return await call_next(request)
+    if not request.session.get("user_id"):
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return RedirectResponse(url="/login")
+    return await call_next(request)
+
+
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+app.include_router(auth_router)
 
 # Global storage
 _storage: PostgresStorage = None
@@ -259,6 +283,19 @@ async def shutdown():
         get_storage().close()
     if _events_conn and not _events_conn.closed:
         _events_conn.close()
+
+
+@app.get("/api/me")
+async def get_current_user(request: Request):
+    """Return the current authenticated user's profile."""
+    user_id = request.session.get("user_id")
+    storage = get_storage()
+    with storage.conn.cursor() as cur:
+        cur.execute("SELECT id, email, name FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="User not found")
+    return {"id": row[0], "email": row[1], "name": row[2]}
 
 
 # Mount static files

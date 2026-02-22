@@ -43,6 +43,27 @@ class PostgresStorage:
     def _init_db(self):
         """Create tables if they don't exist and run migrations."""
         with self._conn.cursor() as cur:
+            # Users table (must be created first; all data tables reference it)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    google_id TEXT UNIQUE,
+                    email TEXT NOT NULL,
+                    name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Seed the first user (owner of all existing data)
+            cur.execute("""
+                INSERT INTO users (id, email, name)
+                VALUES (1, 'gpreda@gmail.com', 'Gabriel Preda')
+                ON CONFLICT (id) DO NOTHING
+            """)
+            # Ensure sequence starts after the seeded id
+            cur.execute("""
+                SELECT setval('users_id_seq', GREATEST(1, (SELECT MAX(id) FROM users)))
+            """)
+
             # Items table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS items (
@@ -651,6 +672,16 @@ class PostgresStorage:
                     END IF;
                 END $$;
             """)
+
+            # === USER_ID MIGRATION ===
+            # Add user_id FK to all data tables and backfill existing rows with user 1
+            for _table in ['items', 'meals', 'daily_weights', 'exercise_entries',
+                           'caloric_targets', 'progress_photos', 'progress_videos']:
+                cur.execute(f"""
+                    ALTER TABLE {_table}
+                    ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)
+                """)
+                cur.execute(f"UPDATE {_table} SET user_id = 1 WHERE user_id IS NULL")
 
         self._conn.commit()
 
