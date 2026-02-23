@@ -358,6 +358,25 @@
             gap: 10px;
             margin-top: 10px;
         }
+        .goal-row { display:flex; align-items:center; margin-top:10px; flex-wrap:wrap; }
+        #goal-input {
+            flex:1; min-width:180px; background:#0f3460; border:1px solid #4ecca3;
+            color:#eee; padding:6px 10px; border-radius:6px; font-size:14px;
+        }
+        .goal-save-btn {
+            background:#4ecca3; color:#0f3460; border:none; padding:6px 14px;
+            border-radius:6px; font-weight:700; cursor:pointer; font-size:13px;
+        }
+        .goal-text { flex:1; font-size:14px; color:#eee; word-break:break-word; }
+        .goal-text.completed { text-decoration:line-through; color:#4ecca3; }
+        .goal-edit-btn { background:none; border:none; color:#4ecca3; font-size:15px; cursor:pointer; padding:2px 4px; }
+        .goal-delete-btn { background:none; border:none; color:#e74c3c; font-size:18px; cursor:pointer; padding:2px 4px; line-height:1; }
+        .goal-complete-btn {
+            background:#0f3460; border:1px solid #4ecca3; color:#4ecca3;
+            padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; white-space:nowrap;
+        }
+        .goal-complete-btn.done { background:#4ecca3; color:#0f3460; font-weight:700; }
+        .goal-complete-btn:disabled, .goal-edit-btn:disabled { opacity:0.4; cursor:default; }
         .burnt-label {
             color: #888;
             font-size: 14px;
@@ -891,28 +910,15 @@
             font-size: 14px;
         }
         .coach-row:last-child { border-bottom: none; }
-        .coach-add-row {
-            display: flex;
-            gap: 8px;
-            margin-top: 10px;
-        }
-        .coach-add-row input {
-            flex: 1;
-            background: #0f3460;
-            border: 1px solid #4ecca3;
-            color: #eee;
-            padding: 7px 10px;
-            border-radius: 6px;
-            font-size: 14px;
-        }
-        .coach-add-row button {
+        .coach-add-btn {
             background: #4ecca3;
             color: #0f3460;
             border: none;
-            padding: 7px 14px;
+            padding: 4px 12px;
             border-radius: 6px;
             font-weight: 700;
             cursor: pointer;
+            font-size: 13px;
         }
         .remove-coach-btn {
             background: none;
@@ -1028,6 +1034,18 @@
                 <span class="burnt-label">Burnt Calories:</span>
                 <span id="burnt-calories">0</span>
                 <span class="burnt-unit">kcal</span>
+            </div>
+            <div class="goal-row" id="goal-row">
+                <div id="goal-input-area" style="display:flex; align-items:center; gap:8px; width:100%;">
+                    <input type="text" id="goal-input" placeholder="Set a daily goal..." maxlength="200">
+                    <button class="goal-save-btn" onclick="saveGoal()">Save</button>
+                </div>
+                <div id="goal-display-area" style="display:none; align-items:center; gap:8px; width:100%; flex-wrap:wrap;">
+                    <span id="goal-text-display" class="goal-text"></span>
+                    <button class="goal-edit-btn" onclick="editGoal()" title="Edit">&#9998;</button>
+                    <button class="goal-complete-btn" id="goal-complete-btn" onclick="toggleGoalComplete()">Mark done</button>
+                    <button class="goal-delete-btn" id="goal-delete-btn" onclick="deleteGoal()" title="Remove">&times;</button>
+                </div>
             </div>
         </div>
 
@@ -1148,12 +1166,11 @@
 
         <!-- Coach Settings -->
         <div class="card" id="coach-settings-card" style="display:none;">
-            <h2>My Coaches</h2>
-            <div class="coaches-list" id="coaches-list"></div>
-            <div class="coach-add-row">
-                <input type="email" id="coach-email-input" placeholder="Coach's email address">
-                <button onclick="addCoach()">Add</button>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                <h2 style="margin:0;">My Coaches</h2>
+                <button class="coach-add-btn" onclick="addCoach()">Add</button>
             </div>
+            <div class="coaches-list" id="coaches-list"></div>
             <div id="coach-add-msg" style="font-size:13px; margin-top:6px; color:#4ecca3;"></div>
         </div>
 
@@ -1183,6 +1200,7 @@
         let currentDescription = '';
         let currentDate = new Date();
         let currentImageFile = null;
+        let coachViewActive = false;
 
         function getDateString(date) {
             // Use local date components to avoid UTC timezone shift
@@ -1762,7 +1780,8 @@
                 loadMeals(),
                 loadBreakdown(),
                 loadExercise(),
-                loadProgressPhoto()
+                loadProgressPhoto(),
+                loadGoal()
             ]).then(() => {
                 if (scrollToBottomAfterLoad) {
                     scrollToBottomAfterLoad = false;
@@ -2613,6 +2632,7 @@
                     document.getElementById('coach-banner').style.display = 'flex';
                     document.getElementById('coach-banner-text').textContent =
                         `Viewing ${data.viewing_as.name || data.viewing_as.email}'s data`;
+                    coachViewActive = true;
                 } else if (data.is_coach && data.clients.length > 0) {
                     const sel = document.getElementById('coach-client-select');
                     sel.style.display = 'flex';
@@ -2667,7 +2687,7 @@
         }
 
         async function addCoach() {
-            const email = document.getElementById('coach-email-input').value.trim();
+            const email = (prompt('Enter coach email address:') || '').trim();
             const msg = document.getElementById('coach-add-msg');
             if (!email) return;
             const res = await fetch('/api/coaches', {
@@ -2679,7 +2699,6 @@
             if (res.ok) {
                 msg.style.color = '#4ecca3';
                 msg.textContent = `Added ${data.coach.name || data.coach.email} as coach.`;
-                document.getElementById('coach-email-input').value = '';
                 loadCoaches();
             } else {
                 msg.style.color = '#e74c3c';
@@ -2692,9 +2711,76 @@
             if (res.ok) loadCoaches();
         }
 
-        document.getElementById('coach-email-input').addEventListener('keydown', e => {
-            if (e.key === 'Enter') { e.preventDefault(); addCoach(); }
+        document.getElementById('goal-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); saveGoal(); }
         });
+
+        async function loadGoal() {
+            const dateStr = getDateString(currentDate);
+            try {
+                const res = await fetch(`/api/daily-goal?date=${dateStr}`);
+                const data = await res.json();
+                renderGoal(data.goal);
+            } catch(e) { console.error('Failed to load goal:', e); }
+        }
+
+        function renderGoal(goal) {
+            const inputArea = document.getElementById('goal-input-area');
+            const displayArea = document.getElementById('goal-display-area');
+            if (!goal) {
+                inputArea.style.display = 'flex';
+                displayArea.style.display = 'none';
+                document.getElementById('goal-input').value = '';
+            } else {
+                inputArea.style.display = 'none';
+                displayArea.style.display = 'flex';
+                const textEl = document.getElementById('goal-text-display');
+                textEl.textContent = goal.goal_text;
+                textEl.className = 'goal-text' + (goal.completed ? ' completed' : '');
+                const btn = document.getElementById('goal-complete-btn');
+                btn.textContent = goal.completed ? '✓ Done' : 'Mark done';
+                btn.className = 'goal-complete-btn' + (goal.completed ? ' done' : '');
+                btn.disabled = coachViewActive;
+                document.getElementById('goal-delete-btn').style.display = coachViewActive ? 'none' : '';
+            }
+        }
+
+        async function saveGoal() {
+            const text = document.getElementById('goal-input').value.trim();
+            if (!text) return;
+            const dateStr = getDateString(currentDate);
+            const res = await fetch(`/api/daily-goal?date=${dateStr}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({goal_text: text})
+            });
+            if (res.ok) { const d = await res.json(); renderGoal(d.goal); }
+        }
+
+        function editGoal() {
+            document.getElementById('goal-input').value =
+                document.getElementById('goal-text-display').textContent;
+            document.getElementById('goal-input-area').style.display = 'flex';
+            document.getElementById('goal-display-area').style.display = 'none';
+            document.getElementById('goal-input').focus();
+        }
+
+        async function toggleGoalComplete() {
+            const isCompleted = document.getElementById('goal-complete-btn').classList.contains('done');
+            const dateStr = getDateString(currentDate);
+            const res = await fetch(`/api/daily-goal/complete?date=${dateStr}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({completed: !isCompleted})
+            });
+            if (res.ok) { const d = await res.json(); renderGoal(d.goal); }
+        }
+
+        async function deleteGoal() {
+            const dateStr = getDateString(currentDate);
+            const res = await fetch(`/api/daily-goal?date=${dateStr}`, {method: 'DELETE'});
+            if (res.ok) renderGoal(null);
+        }
     </script>
 </body>
 </html>

@@ -694,6 +694,20 @@ class PostgresStorage:
                 )
             """)
 
+            # === DAILY GOALS TABLE ===
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS daily_goals (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    date DATE NOT NULL,
+                    goal_text TEXT NOT NULL,
+                    completed BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, date)
+                )
+            """)
+
             # === FIX UNIQUE CONSTRAINTS TO BE PER-USER ===
             # caloric_targets: drop date-only unique, add (user_id, date) unique
             cur.execute("""
@@ -1781,3 +1795,52 @@ class PostgresStorage:
         with self.conn.cursor() as cur:
             cur.execute("SELECT 1 FROM coaches WHERE coach_id=%s AND client_id=%s", (coach_id, client_id))
             return cur.fetchone() is not None
+
+    # Daily goal operations
+    def set_daily_goal(self, user_id: int, goal_text: str, date: Optional[datetime] = None) -> dict:
+        if date is None:
+            date = datetime.now()
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO daily_goals (user_id, date, goal_text)
+                VALUES (%s, DATE(%s), %s)
+                ON CONFLICT (user_id, date)
+                DO UPDATE SET goal_text = %s, updated_at = CURRENT_TIMESTAMP
+                RETURNING goal_text, completed
+            """, (user_id, date, goal_text, goal_text))
+            row = cur.fetchone()
+        self.conn.commit()
+        return dict(row)
+
+    def get_daily_goal(self, user_id: int, date: Optional[datetime] = None) -> Optional[dict]:
+        if date is None:
+            date = datetime.now()
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT goal_text, completed FROM daily_goals WHERE user_id = %s AND date = DATE(%s)",
+                (user_id, date)
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+
+    def set_daily_goal_completed(self, user_id: int, completed: bool, date: Optional[datetime] = None) -> Optional[dict]:
+        if date is None:
+            date = datetime.now()
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE daily_goals SET completed = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s AND date = DATE(%s)
+                RETURNING goal_text, completed
+            """, (completed, user_id, date))
+            row = cur.fetchone()
+        self.conn.commit()
+        return dict(row) if row else None
+
+    def delete_daily_goal(self, user_id: int, date: Optional[datetime] = None) -> bool:
+        if date is None:
+            date = datetime.now()
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM daily_goals WHERE user_id = %s AND date = DATE(%s)", (user_id, date))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
