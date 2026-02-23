@@ -830,10 +830,112 @@
                 line-height: 1.3;
             }
         }
+        /* Coach banner */
+        .coach-banner {
+            background: #0f3460;
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            color: #4ecca3;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .coach-banner button {
+            background: #4ecca3;
+            color: #0f3460;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .coach-client-select {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .coach-client-select span {
+            color: #aaa;
+            font-size: 13px;
+        }
+        .coach-client-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #4ecca3;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .coach-client-btn:hover { background: #1a4a7a; }
+        /* Coach settings card */
+        .coaches-list { margin-top: 10px; }
+        .coach-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #0f3460;
+            font-size: 14px;
+        }
+        .coach-row:last-child { border-bottom: none; }
+        .coach-add-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .coach-add-row input {
+            flex: 1;
+            background: #0f3460;
+            border: 1px solid #4ecca3;
+            color: #eee;
+            padding: 7px 10px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .coach-add-row button {
+            background: #4ecca3;
+            color: #0f3460;
+            border: none;
+            padding: 7px 14px;
+            border-radius: 6px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .remove-coach-btn {
+            background: none;
+            border: none;
+            color: #e74c3c;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- Coach banner (shown when viewing a client's data) -->
+        <div id="coach-banner" class="coach-banner" style="display:none;">
+            <span id="coach-banner-text"></span>
+            <button onclick="exitCoachView()">Exit</button>
+        </div>
+        <!-- Client selector (shown when coach has clients and not in view mode) -->
+        <div id="coach-client-select" class="coach-client-select" style="display:none;">
+            <span>View as client:</span>
+            <div id="coach-client-buttons"></div>
+        </div>
         <!-- Daily Summary with Navigation -->
         <div class="card">
             <div class="day-nav">
@@ -1042,6 +1144,17 @@
                 </div>
                 <a href="/progression" class="progress-upload-btn" style="text-decoration:none;">Progression</a>
             </div>
+        </div>
+
+        <!-- Coach Settings -->
+        <div class="card" id="coach-settings-card" style="display:none;">
+            <h2>My Coaches</h2>
+            <div class="coaches-list" id="coaches-list"></div>
+            <div class="coach-add-row">
+                <input type="email" id="coach-email-input" placeholder="Coach's email address">
+                <button onclick="addCoach()">Add</button>
+            </div>
+            <div id="coach-add-msg" style="font-size:13px; margin-top:6px; color:#4ecca3;"></div>
         </div>
 
         <!-- Bottom Day Navigation -->
@@ -2487,6 +2600,101 @@
         // Initial load
         updateDayNav();
         loadData();
+        initCoachUI();
+
+        // Coach feature
+        async function initCoachUI() {
+            try {
+                const res = await fetch('/api/coach/status');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                if (data.viewing_as) {
+                    document.getElementById('coach-banner').style.display = 'flex';
+                    document.getElementById('coach-banner-text').textContent =
+                        `Viewing ${data.viewing_as.name || data.viewing_as.email}'s data`;
+                } else if (data.is_coach && data.clients.length > 0) {
+                    const sel = document.getElementById('coach-client-select');
+                    sel.style.display = 'flex';
+                    const btns = document.getElementById('coach-client-buttons');
+                    btns.innerHTML = '';
+                    data.clients.forEach(c => {
+                        const btn = document.createElement('button');
+                        btn.className = 'coach-client-btn';
+                        btn.textContent = c.name || c.email;
+                        btn.onclick = () => enterCoachView(c.id);
+                        btns.appendChild(btn);
+                    });
+                }
+
+                // Always show coach settings card
+                document.getElementById('coach-settings-card').style.display = 'block';
+                loadCoaches();
+            } catch (e) {
+                console.error('Coach UI error:', e);
+            }
+        }
+
+        async function enterCoachView(clientId) {
+            const res = await fetch('/api/coach/view-as', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({client_id: clientId})
+            });
+            if (res.ok) location.reload();
+        }
+
+        async function exitCoachView() {
+            const res = await fetch('/api/coach/view-as', {method: 'DELETE'});
+            if (res.ok) location.reload();
+        }
+
+        async function loadCoaches() {
+            const res = await fetch('/api/coaches');
+            if (!res.ok) return;
+            const data = await res.json();
+            const list = document.getElementById('coaches-list');
+            if (data.coaches.length === 0) {
+                list.innerHTML = '<div style="color:#888; font-size:13px;">No coaches added yet.</div>';
+                return;
+            }
+            list.innerHTML = data.coaches.map(c => `
+                <div class="coach-row">
+                    <span>${c.name || c.email} <span style="color:#888; font-size:12px;">${c.email}</span></span>
+                    <button class="remove-coach-btn" onclick="removeCoach(${c.id})" title="Remove coach">&times;</button>
+                </div>
+            `).join('');
+        }
+
+        async function addCoach() {
+            const email = document.getElementById('coach-email-input').value.trim();
+            const msg = document.getElementById('coach-add-msg');
+            if (!email) return;
+            const res = await fetch('/api/coaches', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email})
+            });
+            const data = await res.json();
+            if (res.ok) {
+                msg.style.color = '#4ecca3';
+                msg.textContent = `Added ${data.coach.name || data.coach.email} as coach.`;
+                document.getElementById('coach-email-input').value = '';
+                loadCoaches();
+            } else {
+                msg.style.color = '#e74c3c';
+                msg.textContent = data.detail || 'Failed to add coach';
+            }
+        }
+
+        async function removeCoach(coachId) {
+            const res = await fetch(`/api/coaches/${coachId}`, {method: 'DELETE'});
+            if (res.ok) loadCoaches();
+        }
+
+        document.getElementById('coach-email-input').addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); addCoach(); }
+        });
     </script>
 </body>
 </html>

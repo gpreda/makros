@@ -210,10 +210,38 @@
             padding: 0;
             margin: 0;
         }
+        .coach-banner {
+            background: #0f3460;
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            color: #4ecca3;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .coach-banner button {
+            background: #4ecca3;
+            color: #0f3460;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        <div id="coach-banner" class="coach-banner" style="display:none;">
+            <span id="coach-banner-text"></span>
+            <button onclick="exitCoachView()">Exit</button>
+        </div>
         <div class="header-row">
             <a href="/" class="back-btn">&larr; Back</a>
             <h1>Progression</h1>
@@ -428,6 +456,25 @@
         });
 
         loadPhotos();
+
+        // Coach banner
+        (async function() {
+            try {
+                const res = await fetch('/api/coach/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.viewing_as) {
+                    document.getElementById('coach-banner').style.display = 'flex';
+                    document.getElementById('coach-banner-text').textContent =
+                        `Viewing ${data.viewing_as.name || data.viewing_as.email}'s data`;
+                }
+            } catch(e) {}
+        })();
+
+        async function exitCoachView() {
+            await fetch('/api/coach/view-as', {method: 'DELETE'});
+            location.href = '/';
+        }
     </script>
 </body>
 </html>

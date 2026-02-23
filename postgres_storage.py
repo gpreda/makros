@@ -683,6 +683,76 @@ class PostgresStorage:
                 """)
                 cur.execute(f"UPDATE {_table} SET user_id = 1 WHERE user_id IS NULL")
 
+            # === COACHES TABLE ===
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS coaches (
+                    id SERIAL PRIMARY KEY,
+                    coach_id INTEGER NOT NULL REFERENCES users(id),
+                    client_id INTEGER NOT NULL REFERENCES users(id),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(coach_id, client_id)
+                )
+            """)
+
+            # === FIX UNIQUE CONSTRAINTS TO BE PER-USER ===
+            # caloric_targets: drop date-only unique, add (user_id, date) unique
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'caloric_targets_date_key'
+                    ) THEN
+                        ALTER TABLE caloric_targets DROP CONSTRAINT caloric_targets_date_key;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'caloric_targets_user_date_key'
+                    ) THEN
+                        ALTER TABLE caloric_targets ADD CONSTRAINT caloric_targets_user_date_key
+                            UNIQUE(user_id, date);
+                    END IF;
+                END $$;
+            """)
+            # daily_weights
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'daily_weights_date_key'
+                    ) THEN
+                        ALTER TABLE daily_weights DROP CONSTRAINT daily_weights_date_key;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'daily_weights_user_date_key'
+                    ) THEN
+                        ALTER TABLE daily_weights ADD CONSTRAINT daily_weights_user_date_key
+                            UNIQUE(user_id, date);
+                    END IF;
+                END $$;
+            """)
+            # progress_photos
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'progress_photos_date_key'
+                    ) THEN
+                        ALTER TABLE progress_photos DROP CONSTRAINT progress_photos_date_key;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'progress_photos_user_date_key'
+                    ) THEN
+                        ALTER TABLE progress_photos ADD CONSTRAINT progress_photos_user_date_key
+                            UNIQUE(user_id, date);
+                    END IF;
+                END $$;
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -881,7 +951,7 @@ class PostgresStorage:
         )
 
     # Meal operations
-    def log_meal(self, description: str, items: list[dict],
+    def log_meal(self, user_id: int, description: str, items: list[dict],
                  logged_at: Optional[datetime] = None, name: Optional[str] = None,
                  image_data: Optional[bytes] = None,
                  local_logged_at: Optional[datetime] = None,
@@ -892,19 +962,19 @@ class PostgresStorage:
             with self.conn.cursor() as cur:
                 if logged_at:
                     cur.execute("""
-                        INSERT INTO meals (name, description, logged_at, image_data,
+                        INSERT INTO meals (user_id, name, description, logged_at, image_data,
                                            local_logged_at, timezone)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
-                    """, (name, description, logged_at, image_data,
+                    """, (user_id, name, description, logged_at, image_data,
                           local_logged_at, timezone))
                 else:
                     cur.execute("""
-                        INSERT INTO meals (name, description, image_data,
+                        INSERT INTO meals (user_id, name, description, image_data,
                                            local_logged_at, timezone)
-                        VALUES (%s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         RETURNING id
-                    """, (name, description, image_data,
+                    """, (user_id, name, description, image_data,
                           local_logged_at, timezone))
                 meal_id = cur.fetchone()[0]
 
@@ -937,7 +1007,7 @@ class PostgresStorage:
         COALESCE(SUM(i.added_sugar * mi.quantity), 0) as total_added_sugar
     """
 
-    def get_meals(self, limit: int = 50, offset: int = 0,
+    def get_meals(self, user_id: int, limit: int = 50, offset: int = 0,
                   date: Optional[datetime] = None) -> list[dict]:
         """Get logged meals with pagination, optionally filtered by date."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -962,10 +1032,10 @@ class PostgresStorage:
                            n.single_item_name
                     FROM meals m
                     {nutrition_sub}
-                    WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
+                    WHERE m.user_id = %s AND DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
                     ORDER BY COALESCE(m.local_logged_at, m.logged_at) ASC
                     LIMIT %s OFFSET %s
-                """, (date, limit, offset))
+                """, (user_id, date, limit, offset))
             else:
                 cur.execute(f"""
                     SELECT m.id, m.name, m.description, m.logged_at,
@@ -976,9 +1046,10 @@ class PostgresStorage:
                            n.single_item_name
                     FROM meals m
                     {nutrition_sub}
+                    WHERE m.user_id = %s
                     ORDER BY COALESCE(m.local_logged_at, m.logged_at) ASC
                     LIMIT %s OFFSET %s
-                """, (limit, offset))
+                """, (user_id, limit, offset))
             return [dict(row) for row in cur.fetchall()]
 
     def get_meal_image(self, meal_id: int) -> Optional[bytes]:
@@ -1021,7 +1092,7 @@ class PostgresStorage:
 
             return {**dict(meal), 'items': items}
 
-    def get_daily_totals(self, date: Optional[datetime] = None) -> dict:
+    def get_daily_totals(self, user_id: int, date: Optional[datetime] = None) -> dict:
         """Get nutrition totals for a specific day."""
         if date is None:
             date = datetime.now()
@@ -1045,11 +1116,11 @@ class PostgresStorage:
                 FROM meals m
                 LEFT JOIN meal_items mi ON mi.meal_id = m.id
                 LEFT JOIN items i ON mi.item_id = i.id
-                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
-            """, (date,))
+                WHERE m.user_id = %s AND DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
+            """, (user_id, date))
             return dict(cur.fetchone())
 
-    def get_daily_breakdown(self, date: Optional[datetime] = None) -> list[dict]:
+    def get_daily_breakdown(self, user_id: int, date: Optional[datetime] = None) -> list[dict]:
         """Get all meal items for a specific day with computed macros."""
         if date is None:
             date = datetime.now()
@@ -1072,9 +1143,9 @@ class PostgresStorage:
                 FROM meal_items mi
                 JOIN items i ON mi.item_id = i.id
                 JOIN meals m ON mi.meal_id = m.id
-                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
+                WHERE m.user_id = %s AND DATE(COALESCE(m.local_logged_at, m.logged_at)) = DATE(%s)
                 ORDER BY COALESCE(m.local_logged_at, m.logged_at), mi.id
-            """, (date,))
+            """, (user_id, date))
             return [dict(row) for row in cur.fetchall()]
 
     def get_meal_item(self, item_id: int) -> Optional[dict]:
@@ -1172,10 +1243,10 @@ class PostgresStorage:
                     return None
 
                 cur.execute("""
-                    INSERT INTO meals (name, description)
-                    VALUES (%s, %s)
+                    INSERT INTO meals (user_id, name, description)
+                    VALUES (%s, %s, %s)
                     RETURNING id
-                """, (meal['name'], meal['description']))
+                """, (meal['user_id'], meal['name'], meal['description']))
                 new_meal_id = cur.fetchone()['id']
 
                 # Copy meal_items referencing same item_ids
@@ -1196,11 +1267,12 @@ class PostgresStorage:
         Returns new meal id or None if item not found."""
         try:
             with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Get the meal_item with item name
+                # Get the meal_item with item name and parent meal's user_id
                 cur.execute("""
-                    SELECT mi.*, i.name
+                    SELECT mi.*, i.name, m.user_id
                     FROM meal_items mi
                     JOIN items i ON mi.item_id = i.id
+                    JOIN meals m ON mi.meal_id = m.id
                     WHERE mi.id = %s
                 """, (item_id,))
                 mi = cur.fetchone()
@@ -1208,10 +1280,10 @@ class PostgresStorage:
                     return None
 
                 cur.execute("""
-                    INSERT INTO meals (name, description)
-                    VALUES (%s, %s)
+                    INSERT INTO meals (user_id, name, description)
+                    VALUES (%s, %s, %s)
                     RETURNING id
-                """, (mi['name'], mi['name']))
+                """, (mi['user_id'], mi['name'], mi['name']))
                 new_meal_id = cur.fetchone()['id']
 
                 cur.execute("""
@@ -1234,76 +1306,77 @@ class PostgresStorage:
         return deleted
 
     # Weight operations
-    def get_weight(self, date: Optional[datetime] = None) -> Optional[float]:
+    def get_weight(self, user_id: int, date: Optional[datetime] = None) -> Optional[float]:
         """Get weight for a specific date. Returns weight in lbs or None."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT weight_lbs FROM daily_weights WHERE date = DATE(%s)",
-                (date,)
+                "SELECT weight_lbs FROM daily_weights WHERE user_id = %s AND date = DATE(%s)",
+                (user_id, date)
             )
             row = cur.fetchone()
             return row[0] if row else None
 
-    def get_latest_weight(self, date: Optional[datetime] = None) -> Optional[float]:
+    def get_latest_weight(self, user_id: int, date: Optional[datetime] = None) -> Optional[float]:
         """Get weight for a date, falling back to the most recent earlier weight."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT weight_lbs FROM daily_weights WHERE date <= DATE(%s) ORDER BY date DESC LIMIT 1",
-                (date,)
+                "SELECT weight_lbs FROM daily_weights WHERE user_id = %s AND date <= DATE(%s) ORDER BY date DESC LIMIT 1",
+                (user_id, date)
             )
             row = cur.fetchone()
             return row[0] if row else None
 
-    def set_weight(self, weight_lbs: float, date: Optional[datetime] = None) -> None:
+    def set_weight(self, user_id: int, weight_lbs: float, date: Optional[datetime] = None) -> None:
         """Set weight for a specific date. Updates if exists, inserts if not."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO daily_weights (date, weight_lbs)
-                VALUES (DATE(%s), %s)
-                ON CONFLICT (date)
+                INSERT INTO daily_weights (user_id, date, weight_lbs)
+                VALUES (%s, DATE(%s), %s)
+                ON CONFLICT (user_id, date)
                 DO UPDATE SET weight_lbs = %s, updated_at = CURRENT_TIMESTAMP
-            """, (date, weight_lbs, weight_lbs))
+            """, (user_id, date, weight_lbs, weight_lbs))
         self.conn.commit()
 
-    def delete_weight(self, date: Optional[datetime] = None) -> bool:
+    def delete_weight(self, user_id: int, date: Optional[datetime] = None) -> bool:
         """Delete weight for a specific date. Returns True if deleted."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM daily_weights WHERE date = DATE(%s)", (date,))
+            cur.execute("DELETE FROM daily_weights WHERE user_id = %s AND date = DATE(%s)", (user_id, date))
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
 
-    def get_weight_history(self, days: Optional[int] = None) -> list[dict]:
+    def get_weight_history(self, user_id: int, days: Optional[int] = None) -> list[dict]:
         """Get weight history. If days is None, returns all history."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             if days:
                 cur.execute("""
                     SELECT date, weight_lbs
                     FROM daily_weights
-                    WHERE date >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    WHERE user_id = %s AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
                     ORDER BY date ASC
-                """, (days,))
+                """, (user_id, days))
             else:
                 cur.execute("""
                     SELECT date, weight_lbs
                     FROM daily_weights
+                    WHERE user_id = %s
                     ORDER BY date ASC
-                """)
+                """, (user_id,))
             return [{'date': str(row['date']), 'weight_lbs': row['weight_lbs']} for row in cur.fetchall()]
 
-    def get_calories_history(self, days: Optional[int] = None) -> list[dict]:
+    def get_calories_history(self, user_id: int, days: Optional[int] = None) -> list[dict]:
         """Get daily calories history. If days is None, returns all history.
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1313,22 +1386,22 @@ class PostgresStorage:
                 FROM meals m
                 JOIN meal_items mi ON mi.meal_id = m.id
                 JOIN items i ON mi.item_id = i.id
-                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) < CURRENT_DATE
+                WHERE m.user_id = %s AND DATE(COALESCE(m.local_logged_at, m.logged_at)) < CURRENT_DATE
             """
             if days:
                 cur.execute(base + """
                     AND DATE(COALESCE(m.local_logged_at, m.logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
                     GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
-                """, (days,))
+                """, (user_id, days))
             else:
                 cur.execute(base + """
                     GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
-                """)
+                """, (user_id,))
             return [{'date': str(row['date']), 'calories': int(row['calories'] or 0)} for row in cur.fetchall()]
 
-    def get_macros_history(self, days: Optional[int] = None) -> list[dict]:
+    def get_macros_history(self, user_id: int, days: Optional[int] = None) -> list[dict]:
         """Get daily macros history for all nutrients. If days is None, returns all history.
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1349,19 +1422,19 @@ class PostgresStorage:
                 FROM meals m
                 JOIN meal_items mi ON mi.meal_id = m.id
                 JOIN items i ON mi.item_id = i.id
-                WHERE DATE(COALESCE(m.local_logged_at, m.logged_at)) < CURRENT_DATE
+                WHERE m.user_id = %s AND DATE(COALESCE(m.local_logged_at, m.logged_at)) < CURRENT_DATE
             """
             if days:
                 cur.execute(base + """
                     AND DATE(COALESCE(m.local_logged_at, m.logged_at)) >= CURRENT_DATE - %s * INTERVAL '1 day'
                     GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
-                """, (days,))
+                """, (user_id, days))
             else:
                 cur.execute(base + """
                     GROUP BY DATE(COALESCE(m.local_logged_at, m.logged_at))
                     ORDER BY date ASC
-                """)
+                """, (user_id,))
 
             return [{
                 'date': str(row['date']),
@@ -1380,7 +1453,7 @@ class PostgresStorage:
             } for row in cur.fetchall()]
 
     # Exercise entry methods
-    def add_exercise_entry(self, date: Optional[datetime], exercise_type: str,
+    def add_exercise_entry(self, user_id: int, date: Optional[datetime], exercise_type: str,
                            amount: Optional[float], unit: Optional[str],
                            calories_burnt: int) -> int:
         """Add an exercise entry. Returns the entry id."""
@@ -1389,15 +1462,15 @@ class PostgresStorage:
 
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO exercise_entries (date, exercise_type, amount, unit, calories_burnt)
-                VALUES (DATE(%s), %s, %s, %s, %s)
+                INSERT INTO exercise_entries (user_id, date, exercise_type, amount, unit, calories_burnt)
+                VALUES (%s, DATE(%s), %s, %s, %s, %s)
                 RETURNING id
-            """, (date, exercise_type, amount, unit, calories_burnt))
+            """, (user_id, date, exercise_type, amount, unit, calories_burnt))
             entry_id = cur.fetchone()[0]
         self.conn.commit()
         return entry_id
 
-    def get_exercise_entries(self, date: Optional[datetime] = None) -> list[dict]:
+    def get_exercise_entries(self, user_id: int, date: Optional[datetime] = None) -> list[dict]:
         """Get exercise entries for a specific date."""
         if date is None:
             date = datetime.now()
@@ -1406,12 +1479,12 @@ class PostgresStorage:
             cur.execute("""
                 SELECT id, date, exercise_type, amount, unit, calories_burnt, logged_at
                 FROM exercise_entries
-                WHERE date = DATE(%s)
+                WHERE user_id = %s AND date = DATE(%s)
                 ORDER BY logged_at ASC
-            """, (date,))
+            """, (user_id, date))
             return [dict(row) for row in cur.fetchall()]
 
-    def get_daily_burnt_calories(self, date: Optional[datetime] = None) -> int:
+    def get_daily_burnt_calories(self, user_id: int, date: Optional[datetime] = None) -> int:
         """Get total burnt calories for a specific date."""
         if date is None:
             date = datetime.now()
@@ -1420,8 +1493,8 @@ class PostgresStorage:
             cur.execute("""
                 SELECT COALESCE(SUM(calories_burnt), 0)
                 FROM exercise_entries
-                WHERE date = DATE(%s)
-            """, (date,))
+                WHERE user_id = %s AND date = DATE(%s)
+            """, (user_id, date))
             return cur.fetchone()[0]
 
     def delete_exercise_entry(self, entry_id: int) -> bool:
@@ -1433,21 +1506,21 @@ class PostgresStorage:
         return deleted
 
     # Caloric target operations
-    def set_caloric_target(self, target_calories: int, date: Optional[datetime] = None) -> None:
+    def set_caloric_target(self, user_id: int, target_calories: int, date: Optional[datetime] = None) -> None:
         """Set caloric target for a specific date. Updates if exists, inserts if not."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO caloric_targets (date, target_calories)
-                VALUES (DATE(%s), %s)
-                ON CONFLICT (date)
+                INSERT INTO caloric_targets (user_id, date, target_calories)
+                VALUES (%s, DATE(%s), %s)
+                ON CONFLICT (user_id, date)
                 DO UPDATE SET target_calories = %s, updated_at = CURRENT_TIMESTAMP
-            """, (date, target_calories, target_calories))
+            """, (user_id, date, target_calories, target_calories))
         self.conn.commit()
 
-    def get_caloric_target(self, date: Optional[datetime] = None) -> Optional[int]:
+    def get_caloric_target(self, user_id: int, date: Optional[datetime] = None) -> Optional[int]:
         """Get caloric target for a specific date (carry-forward lookup).
         Returns the most recent target set on or before the given date."""
         if date is None:
@@ -1456,39 +1529,40 @@ class PostgresStorage:
         with self.conn.cursor() as cur:
             cur.execute("""
                 SELECT target_calories FROM caloric_targets
-                WHERE date <= DATE(%s)
+                WHERE user_id = %s AND date <= DATE(%s)
                 ORDER BY date DESC LIMIT 1
-            """, (date,))
+            """, (user_id, date))
             row = cur.fetchone()
             return row[0] if row else None
 
-    def delete_caloric_target(self, date: Optional[datetime] = None) -> bool:
+    def delete_caloric_target(self, user_id: int, date: Optional[datetime] = None) -> bool:
         """Delete caloric target for a specific date. Returns True if deleted."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM caloric_targets WHERE date = DATE(%s)", (date,))
+            cur.execute("DELETE FROM caloric_targets WHERE user_id = %s AND date = DATE(%s)", (user_id, date))
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
 
-    def get_caloric_target_history(self, days: Optional[int] = None) -> list[dict]:
+    def get_caloric_target_history(self, user_id: int, days: Optional[int] = None) -> list[dict]:
         """Get caloric target change-point history for charting."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             if days:
                 cur.execute("""
                     SELECT date, target_calories
                     FROM caloric_targets
-                    WHERE date >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    WHERE user_id = %s AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
                     ORDER BY date ASC
-                """, (days,))
+                """, (user_id, days))
             else:
                 cur.execute("""
                     SELECT date, target_calories
                     FROM caloric_targets
+                    WHERE user_id = %s
                     ORDER BY date ASC
-                """)
+                """, (user_id,))
             return [{'date': str(row['date']), 'target_calories': row['target_calories']} for row in cur.fetchall()]
 
     # Progress photo operations
@@ -1658,3 +1732,52 @@ class PostgresStorage:
             self.conn.rollback()
             raise
 
+    # Coach management operations
+    def add_coach(self, client_id: int, coach_email: str) -> dict:
+        """Add a coach by email. Returns coach user info or raises ValueError."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id, name, email FROM users WHERE email = %s", (coach_email,))
+            coach = cur.fetchone()
+        if not coach:
+            raise ValueError("No user found with that email")
+        if coach["id"] == client_id:
+            raise ValueError("You cannot add yourself as a coach")
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO coaches (coach_id, client_id) VALUES (%s, %s)
+                ON CONFLICT (coach_id, client_id) DO NOTHING
+            """, (coach["id"], client_id))
+        self.conn.commit()
+        return dict(coach)
+
+    def remove_coach(self, client_id: int, coach_id: int) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM coaches WHERE coach_id=%s AND client_id=%s", (coach_id, client_id))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
+
+    def get_coaches(self, client_id: int) -> list[dict]:
+        """Get all coaches for a client."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT u.id, u.name, u.email FROM coaches c
+                JOIN users u ON u.id = c.coach_id
+                WHERE c.client_id = %s ORDER BY c.created_at
+            """, (client_id,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_clients(self, coach_id: int) -> list[dict]:
+        """Get all clients for a coach."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT u.id, u.name, u.email FROM coaches c
+                JOIN users u ON u.id = c.client_id
+                WHERE c.coach_id = %s ORDER BY c.created_at
+            """, (coach_id,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def is_coach_of(self, coach_id: int, client_id: int) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM coaches WHERE coach_id=%s AND client_id=%s", (coach_id, client_id))
+            return cur.fetchone() is not None

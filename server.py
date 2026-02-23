@@ -128,6 +128,18 @@ def get_storage() -> PostgresStorage:
     return _storage
 
 
+def get_effective_user_id(request: Request) -> int:
+    """Returns the user_id to use for data ops. Coach view uses client's ID."""
+    viewing_as = request.session.get("coach_viewing_as")
+    if viewing_as:
+        return int(viewing_as)
+    return int(request.session["user_id"])
+
+
+def is_in_coach_view(request: Request) -> bool:
+    return bool(request.session.get("coach_viewing_as"))
+
+
 def get_genai_client() -> genai.Client:
     """Get or create Gemini client."""
     global _genai_client
@@ -736,10 +748,13 @@ Return ONLY the dictionary, no other text or markdown.
 
 
 @app.post("/api/meals")
-async def log_meal_endpoint(request: LogMealRequest):
-    """Log a meal to the database."""
+async def log_meal_endpoint(request: LogMealRequest, req: Request):
+    """Log a meal to the database. Not allowed in coach view."""
+    if is_in_coach_view(req):
+        raise HTTPException(status_code=403, detail="Coaches cannot log meals for clients")
     try:
         storage = get_storage()
+        user_id = int(req.session["user_id"])
 
         # Use browser's date if provided, otherwise fall back to server time
         meal_datetime = None
@@ -757,7 +772,7 @@ async def log_meal_endpoint(request: LogMealRequest):
         meal_name = generate_smart_meal_name(request.items)
 
         db_start = time.time()
-        meal_id = storage.log_meal(request.description, request.items,
+        meal_id = storage.log_meal(user_id, request.description, request.items,
                                    logged_at=meal_datetime, name=meal_name,
                                    local_logged_at=local_logged_at,
                                    timezone=request.timezone)
@@ -783,6 +798,7 @@ async def log_meal_endpoint(request: LogMealRequest):
 
 @app.post("/api/meals/with-image")
 async def log_meal_with_image(
+    req: Request,
     description: str = Form(...),
     items: str = Form(...),  # JSON string [{item_id, unit, quantity}]
     date: Optional[str] = Form(None),
@@ -791,9 +807,12 @@ async def log_meal_with_image(
     timezone: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None)
 ):
-    """Log a meal with an optional image."""
+    """Log a meal with an optional image. Not allowed in coach view."""
+    if is_in_coach_view(req):
+        raise HTTPException(status_code=403, detail="Coaches cannot log meals for clients")
     try:
         storage = get_storage()
+        user_id = int(req.session["user_id"])
 
         # Parse JSON strings
         items_list = json.loads(items)
@@ -819,7 +838,7 @@ async def log_meal_with_image(
         smart_name = generate_smart_meal_name(items_list)
 
         db_start = time.time()
-        meal_id = storage.log_meal(description, items_list,
+        meal_id = storage.log_meal(user_id, description, items_list,
                                    logged_at=meal_datetime, name=smart_name,
                                    image_data=image_data,
                                    local_logged_at=local_logged_at,
@@ -848,7 +867,7 @@ async def log_meal_with_image(
 
 
 @app.get("/api/meals")
-async def get_meals(limit: int = 50, offset: int = 0, date: Optional[str] = None):
+async def get_meals(request: Request, limit: int = 50, offset: int = 0, date: Optional[str] = None):
     """Get logged meals, optionally filtered by date."""
     dt = None
     if date:
@@ -856,7 +875,8 @@ async def get_meals(limit: int = 50, offset: int = 0, date: Optional[str] = None
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-    meals = get_storage().get_meals(limit, offset, dt)
+    user_id = get_effective_user_id(request)
+    meals = get_storage().get_meals(user_id, limit, offset, dt)
     return {"meals": meals}
 
 
@@ -957,7 +977,7 @@ async def copy_meal(meal_id: int):
 
 
 @app.get("/api/daily")
-async def get_daily_totals(date: Optional[str] = None):
+async def get_daily_totals(request: Request, date: Optional[str] = None):
     """Get daily nutrition totals, including caloric target."""
     dt = None
     if date:
@@ -965,14 +985,15 @@ async def get_daily_totals(date: Optional[str] = None):
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
+    user_id = get_effective_user_id(request)
     storage = get_storage()
-    result = storage.get_daily_totals(dt)
-    result['caloric_target'] = storage.get_caloric_target(dt)
+    result = storage.get_daily_totals(user_id, dt)
+    result['caloric_target'] = storage.get_caloric_target(user_id, dt)
     return result
 
 
 @app.get("/api/daily/breakdown")
-async def get_daily_breakdown(date: Optional[str] = None):
+async def get_daily_breakdown(request: Request, date: Optional[str] = None):
     """Get all meal items for a day."""
     dt = None
     if date:
@@ -980,7 +1001,8 @@ async def get_daily_breakdown(date: Optional[str] = None):
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-    items = get_storage().get_daily_breakdown(dt)
+    user_id = get_effective_user_id(request)
+    items = get_storage().get_daily_breakdown(user_id, dt)
     return {"items": items}
 
 
@@ -990,7 +1012,7 @@ class WeightRequest(BaseModel):
 
 
 @app.get("/api/weight")
-async def get_weight(date: Optional[str] = None):
+async def get_weight(req: Request, date: Optional[str] = None):
     """Get weight for a specific date."""
     dt = None
     if date:
@@ -998,13 +1020,16 @@ async def get_weight(date: Optional[str] = None):
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-    weight = get_storage().get_weight(dt)
+    user_id = get_effective_user_id(req)
+    weight = get_storage().get_weight(user_id, dt)
     return {"weight_lbs": weight}
 
 
 @app.post("/api/weight")
-async def set_weight(request: WeightRequest, date: Optional[str] = None):
-    """Set weight for a specific date."""
+async def set_weight(request: WeightRequest, req: Request, date: Optional[str] = None):
+    """Set weight for a specific date. Not allowed in coach view."""
+    if is_in_coach_view(req):
+        raise HTTPException(status_code=403, detail="Coaches cannot log weight for clients")
     dt = None
     if date:
         try:
@@ -1012,8 +1037,9 @@ async def set_weight(request: WeightRequest, date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = int(req.session["user_id"])
     db_start = time.time()
-    get_storage().set_weight(request.weight_lbs, dt)
+    get_storage().set_weight(user_id, request.weight_lbs, dt)
     db_ms = int((time.time() - db_start) * 1000)
 
     log_event('weight.set',
@@ -1025,8 +1051,10 @@ async def set_weight(request: WeightRequest, date: Optional[str] = None):
 
 
 @app.delete("/api/weight")
-async def delete_weight(date: Optional[str] = None):
-    """Delete weight for a specific date."""
+async def delete_weight(req: Request, date: Optional[str] = None):
+    """Delete weight for a specific date. Not allowed in coach view."""
+    if is_in_coach_view(req):
+        raise HTTPException(status_code=403, detail="Coaches cannot delete weight for clients")
     dt = None
     if date:
         try:
@@ -1034,8 +1062,9 @@ async def delete_weight(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = int(req.session["user_id"])
     db_start = time.time()
-    deleted = get_storage().delete_weight(dt)
+    deleted = get_storage().delete_weight(user_id, dt)
     db_ms = int((time.time() - db_start) * 1000)
 
     if deleted:
@@ -1047,29 +1076,36 @@ async def delete_weight(date: Optional[str] = None):
 
 
 @app.get("/api/weight/history")
-async def get_weight_history(days: Optional[int] = None):
+async def get_weight_history(req: Request, days: Optional[int] = None):
     """Get weight history. Pass days=30, 90, 365 or omit for all."""
-    history = get_storage().get_weight_history(days)
+    user_id = get_effective_user_id(req)
+    history = get_storage().get_weight_history(user_id, days)
     return {"history": history}
 
 
 @app.get("/api/daily/history")
-async def get_calories_history(days: Optional[int] = None):
+async def get_calories_history(req: Request, days: Optional[int] = None):
     """Get daily calories history. Pass days=30, 90, 365 or omit for all."""
-    history = get_storage().get_calories_history(days)
+    user_id = get_effective_user_id(req)
+    history = get_storage().get_calories_history(user_id, days)
     return {"history": history}
 
 
 @app.get("/api/daily/macros-history")
-async def get_macros_history(days: Optional[int] = None):
+async def get_macros_history(req: Request, days: Optional[int] = None):
     """Get daily macros history for all nutrients. Pass days=30, 90, 365 or omit for all."""
-    history = get_storage().get_macros_history(days)
+    user_id = get_effective_user_id(req)
+    history = get_storage().get_macros_history(user_id, days)
     return {"history": history}
 
 
 # Exercise tracking endpoints
 class CaloricTargetRequest(BaseModel):
     target_calories: int
+
+
+class AddCoachRequest(BaseModel):
+    email: str
 
 
 class ExerciseRequest(BaseModel):
@@ -1103,8 +1139,10 @@ def calculate_burnt_calories(exercise_type: str, amount: Optional[float],
 
 
 @app.post("/api/exercise")
-async def add_exercise(request: ExerciseRequest, date: Optional[str] = None):
-    """Add an exercise entry."""
+async def add_exercise(request: ExerciseRequest, req: Request, date: Optional[str] = None):
+    """Add an exercise entry. Not allowed in coach view."""
+    if is_in_coach_view(req):
+        raise HTTPException(status_code=403, detail="Coaches cannot log exercise for clients")
     dt = None
     if date:
         try:
@@ -1112,8 +1150,9 @@ async def add_exercise(request: ExerciseRequest, date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = int(req.session["user_id"])
     # Get weight for calorie calculation, falling back to last known weight
-    weight = get_storage().get_latest_weight(dt)
+    weight = get_storage().get_latest_weight(user_id, dt)
     if not weight:
         raise HTTPException(status_code=400, detail="No weight logged yet. Please log your weight first.")
 
@@ -1122,7 +1161,7 @@ async def add_exercise(request: ExerciseRequest, date: Optional[str] = None):
     )
 
     entry_id = get_storage().add_exercise_entry(
-        dt, request.exercise_type, request.amount, request.unit, calories
+        user_id, dt, request.exercise_type, request.amount, request.unit, calories
     )
 
     log_event('exercise.add',
@@ -1135,7 +1174,7 @@ async def add_exercise(request: ExerciseRequest, date: Optional[str] = None):
 
 
 @app.get("/api/exercise")
-async def get_exercise(date: Optional[str] = None):
+async def get_exercise(req: Request, date: Optional[str] = None):
     """Get exercise entries and total burnt calories for a date."""
     dt = None
     if date:
@@ -1144,8 +1183,9 @@ async def get_exercise(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    entries = get_storage().get_exercise_entries(dt)
-    total_burnt = get_storage().get_daily_burnt_calories(dt)
+    user_id = get_effective_user_id(req)
+    entries = get_storage().get_exercise_entries(user_id, dt)
+    total_burnt = get_storage().get_daily_burnt_calories(user_id, dt)
 
     # Convert date objects to strings for JSON serialization
     for entry in entries:
@@ -1165,7 +1205,7 @@ async def delete_exercise(entry_id: int):
 
 
 @app.get("/api/caloric-target")
-async def get_caloric_target(date: Optional[str] = None):
+async def get_caloric_target(req: Request, date: Optional[str] = None):
     """Get caloric target for a specific date (carry-forward lookup)."""
     dt = None
     if date:
@@ -1173,13 +1213,14 @@ async def get_caloric_target(date: Optional[str] = None):
             dt = datetime.fromisoformat(date)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
-    target = get_storage().get_caloric_target(dt)
+    user_id = get_effective_user_id(req)
+    target = get_storage().get_caloric_target(user_id, dt)
     return {"target_calories": target}
 
 
 @app.post("/api/caloric-target")
-async def set_caloric_target(request: CaloricTargetRequest, date: Optional[str] = None):
-    """Set caloric target for a specific date."""
+async def set_caloric_target(request: CaloricTargetRequest, req: Request, date: Optional[str] = None):
+    """Set caloric target for a specific date. Coaches may update their client's target."""
     dt = None
     if date:
         try:
@@ -1187,8 +1228,9 @@ async def set_caloric_target(request: CaloricTargetRequest, date: Optional[str] 
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = get_effective_user_id(req)
     db_start = time.time()
-    get_storage().set_caloric_target(request.target_calories, dt)
+    get_storage().set_caloric_target(user_id, request.target_calories, dt)
     db_ms = int((time.time() - db_start) * 1000)
 
     log_event('caloric_target.set',
@@ -1200,8 +1242,10 @@ async def set_caloric_target(request: CaloricTargetRequest, date: Optional[str] 
 
 
 @app.delete("/api/caloric-target")
-async def delete_caloric_target(date: Optional[str] = None):
-    """Delete caloric target for a specific date."""
+async def delete_caloric_target(req: Request, date: Optional[str] = None):
+    """Delete caloric target for a specific date. Not allowed in coach view."""
+    if is_in_coach_view(req):
+        raise HTTPException(status_code=403, detail="Coaches cannot delete caloric targets")
     dt = None
     if date:
         try:
@@ -1209,8 +1253,9 @@ async def delete_caloric_target(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = get_effective_user_id(req)
     db_start = time.time()
-    deleted = get_storage().delete_caloric_target(dt)
+    deleted = get_storage().delete_caloric_target(user_id, dt)
     db_ms = int((time.time() - db_start) * 1000)
 
     if deleted:
@@ -1222,10 +1267,79 @@ async def delete_caloric_target(date: Optional[str] = None):
 
 
 @app.get("/api/caloric-target/history")
-async def get_caloric_target_history(days: Optional[int] = None):
+async def get_caloric_target_history(req: Request, days: Optional[int] = None):
     """Get caloric target change-point history. Pass days=30, 90, 365 or omit for all."""
-    history = get_storage().get_caloric_target_history(days)
+    user_id = get_effective_user_id(req)
+    history = get_storage().get_caloric_target_history(user_id, days)
     return {"history": history}
+
+
+# Coach management endpoints
+@app.get("/api/coach/status")
+async def coach_status(request: Request):
+    """Returns current coach/client view state."""
+    user_id = int(request.session["user_id"])
+    viewing_as_id = request.session.get("coach_viewing_as")
+    clients = get_storage().get_clients(user_id)
+    viewing_as = None
+    if viewing_as_id:
+        viewing_as = next((c for c in clients if c["id"] == int(viewing_as_id)), None)
+    return {
+        "is_coach": len(clients) > 0,
+        "clients": clients,
+        "viewing_as": viewing_as
+    }
+
+
+@app.post("/api/coach/view-as")
+async def coach_view_as(request: Request):
+    """Set coach view mode: coach starts viewing a specific client's data."""
+    body = await request.json()
+    client_id = int(body["client_id"])
+    coach_id = int(request.session["user_id"])
+    if not get_storage().is_coach_of(coach_id, client_id):
+        raise HTTPException(status_code=403, detail="Not a coach for this user")
+    request.session["coach_viewing_as"] = client_id
+    clients = get_storage().get_clients(coach_id)
+    client = next((c for c in clients if c["id"] == client_id), None)
+    return {"viewing_as": client}
+
+
+@app.delete("/api/coach/view-as")
+async def coach_exit_view(request: Request):
+    """Exit coach view mode, return to own data."""
+    request.session.pop("coach_viewing_as", None)
+    return {"message": "Exited client view"}
+
+
+@app.get("/api/coaches")
+async def list_coaches(request: Request):
+    user_id = int(request.session["user_id"])
+    return {"coaches": get_storage().get_coaches(user_id)}
+
+
+@app.post("/api/coaches")
+async def add_coach(body: AddCoachRequest, request: Request):
+    user_id = int(request.session["user_id"])
+    try:
+        coach = get_storage().add_coach(user_id, body.email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"coach": coach}
+
+
+@app.delete("/api/coaches/{coach_id}")
+async def remove_coach(coach_id: int, request: Request):
+    user_id = int(request.session["user_id"])
+    if not get_storage().remove_coach(user_id, coach_id):
+        raise HTTPException(status_code=404, detail="Coach relationship not found")
+    return {"message": "Coach removed"}
+
+
+@app.get("/api/clients")
+async def list_clients(request: Request):
+    user_id = int(request.session["user_id"])
+    return {"clients": get_storage().get_clients(user_id)}
 
 
 @app.post("/api/progress-photo")
