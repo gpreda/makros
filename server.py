@@ -22,6 +22,7 @@ import psycopg2
 
 from auth import router as auth_router
 from models import Item, VALID_UNITS
+from notifications import notify_goal_added, notify_goal_completed
 from postgres_storage import PostgresStorage
 
 
@@ -1112,6 +1113,10 @@ class DailyGoalRequest(BaseModel):
     goal_text: str
 
 
+class DailyGoalUpdateRequest(BaseModel):
+    goal_text: str
+
+
 class DailyGoalCompleteRequest(BaseModel):
     completed: bool
 
@@ -1351,8 +1356,8 @@ async def list_clients(request: Request):
 
 
 # Daily goal endpoints
-@app.get("/api/daily-goal")
-async def get_daily_goal(req: Request, date: Optional[str] = None):
+@app.get("/api/daily-goals")
+async def get_daily_goals(req: Request, date: Optional[str] = None):
     dt = None
     if date:
         try:
@@ -1360,13 +1365,13 @@ async def get_daily_goal(req: Request, date: Optional[str] = None):
         except ValueError:
             raise HTTPException(400, "Invalid date format")
     user_id = get_effective_user_id(req)
-    goal = get_storage().get_daily_goal(user_id, dt)
-    return {"goal": goal}
+    goals = get_storage().get_daily_goals(user_id, dt)
+    return {"goals": goals}
 
 
-@app.post("/api/daily-goal")
-async def set_daily_goal(body: DailyGoalRequest, req: Request, date: Optional[str] = None):
-    """Set/update goal text. Allowed for coaches too (uses effective user_id)."""
+@app.post("/api/daily-goals")
+async def add_daily_goal(body: DailyGoalRequest, req: Request, date: Optional[str] = None):
+    """Add a new goal. Allowed for coaches too (uses effective user_id)."""
     dt = None
     if date:
         try:
@@ -1374,42 +1379,67 @@ async def set_daily_goal(body: DailyGoalRequest, req: Request, date: Optional[st
         except ValueError:
             raise HTTPException(400, "Invalid date format")
     user_id = get_effective_user_id(req)
-    goal = get_storage().set_daily_goal(user_id, body.goal_text, dt)
+    goal = get_storage().add_daily_goal(user_id, body.goal_text, dt)
+
+    if is_in_coach_view(req):
+        storage = get_storage()
+        client = storage.get_user_by_id(user_id)
+        coach = storage.get_user_by_id(int(req.session["user_id"]))
+        if client and coach and client.get("email"):
+            goal_date = (dt or datetime.now()).strftime("%Y-%m-%d")
+            notify_goal_added(
+                client["email"], client.get("name", ""),
+                coach.get("name", "Your coach"),
+                body.goal_text, goal_date,
+            )
+
     return {"goal": goal}
 
 
-@app.post("/api/daily-goal/complete")
-async def complete_daily_goal(body: DailyGoalCompleteRequest, req: Request, date: Optional[str] = None):
+@app.put("/api/daily-goals/{goal_id}")
+async def update_daily_goal(goal_id: int, body: DailyGoalUpdateRequest, req: Request):
+    """Update goal text. Allowed for coaches too."""
+    user_id = get_effective_user_id(req)
+    goal = get_storage().update_daily_goal(goal_id, user_id, body.goal_text)
+    if not goal:
+        raise HTTPException(404, "Goal not found")
+    return {"goal": goal}
+
+
+@app.post("/api/daily-goals/{goal_id}/complete")
+async def complete_daily_goal(goal_id: int, body: DailyGoalCompleteRequest, req: Request):
     """Toggle completion. Owner only — coaches cannot mark complete."""
     if is_in_coach_view(req):
         raise HTTPException(403, "Coaches cannot mark goals complete")
-    dt = None
-    if date:
-        try:
-            dt = datetime.fromisoformat(date)
-        except ValueError:
-            raise HTTPException(400, "Invalid date format")
     user_id = int(req.session["user_id"])
-    goal = get_storage().set_daily_goal_completed(user_id, body.completed, dt)
+    goal = get_storage().set_daily_goal_completed(goal_id, user_id, body.completed)
     if not goal:
-        raise HTTPException(404, "No goal for this date")
+        raise HTTPException(404, "Goal not found")
+
+    if body.completed:
+        storage = get_storage()
+        coaches = storage.get_coaches(user_id)
+        if coaches:
+            client = storage.get_user_by_id(user_id)
+            client_name = client.get("name", "") if client else ""
+            for coach in coaches:
+                if coach.get("email"):
+                    notify_goal_completed(
+                        coach["email"], coach.get("name", ""),
+                        client_name, goal["goal_text"],
+                    )
+
     return {"goal": goal}
 
 
-@app.delete("/api/daily-goal")
-async def delete_daily_goal(req: Request, date: Optional[str] = None):
+@app.delete("/api/daily-goals/{goal_id}")
+async def delete_daily_goal(goal_id: int, req: Request):
     """Delete goal. Owner only."""
     if is_in_coach_view(req):
         raise HTTPException(403, "Coaches cannot delete goals")
-    dt = None
-    if date:
-        try:
-            dt = datetime.fromisoformat(date)
-        except ValueError:
-            raise HTTPException(400, "Invalid date format")
     user_id = int(req.session["user_id"])
-    if not get_storage().delete_daily_goal(user_id, dt):
-        raise HTTPException(404, "No goal for this date")
+    if not get_storage().delete_daily_goal(goal_id, user_id):
+        raise HTTPException(404, "Goal not found")
     return {"message": "Goal deleted"}
 
 
