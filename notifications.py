@@ -7,10 +7,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-SMTP_EMAIL = os.environ.get("SMTP_EMAIL")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_EMAIL = os.environ.get("SMTP_USER")
+SMTP_PASSWORD = os.environ.get("SMTP_PASS")
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 
 
 def send_email(to_email: str, subject: str, html_body: str):
@@ -41,7 +41,7 @@ def notify_goal_added(client_email: str, client_name: str, coach_name: str,
 <blockquote style="border-left:3px solid #4CAF50;padding:8px 12px;margin:8px 0;background:#f9f9f9;">
 {goal_text}
 </blockquote>
-<p>Open <a href="https://makros.gpreda.com">Makros</a> to view it.</p>
+<p>Open <a href="https://makros.pr3da.com">Makros</a> to view it.</p>
 </body></html>"""
 
     def _send():
@@ -67,7 +67,7 @@ def notify_goal_completed(coach_email: str, coach_name: str, client_name: str,
 <blockquote style="border-left:3px solid #4CAF50;padding:8px 12px;margin:8px 0;background:#f9f9f9;">
 {goal_text}
 </blockquote>
-<p>Open <a href="https://makros.gpreda.com">Makros</a> to check their progress.</p>
+<p>Open <a href="https://makros.pr3da.com">Makros</a> to check their progress.</p>
 </body></html>"""
 
     def _send():

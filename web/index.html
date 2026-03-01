@@ -1174,6 +1174,21 @@
             <div id="coach-add-msg" style="font-size:13px; margin-top:6px; color:#4ecca3;"></div>
         </div>
 
+        <!-- Fitbit Settings -->
+        <div class="card" id="fitbit-settings-card" style="display:none;">
+            <h2 style="margin:0 0 10px 0;">Fitbit</h2>
+            <div id="fitbit-disconnected" style="display:none;">
+                <a href="/auth/fitbit" class="coach-add-btn" style="text-decoration:none; display:inline-block;">Connect Fitbit</a>
+            </div>
+            <div id="fitbit-connected" style="display:none;">
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button class="coach-add-btn" onclick="syncFitbit()">Sync Weight</button>
+                    <button class="remove-coach-btn" onclick="disconnectFitbit()" style="background:#e74c3c; color:white; border:none; padding:4px 10px; border-radius:4px; cursor:pointer;">Disconnect</button>
+                </div>
+            </div>
+            <div id="fitbit-msg" style="font-size:13px; margin-top:6px;"></div>
+        </div>
+
         <!-- Bottom Day Navigation -->
         <div class="card" id="bottom-day-nav">
             <div class="day-nav">
@@ -2620,6 +2635,7 @@
         updateDayNav();
         loadData();
         initCoachUI();
+        initFitbitUI();
 
         // Coach feature
         async function initCoachUI() {
@@ -2833,6 +2849,62 @@
         async function deleteGoal(goalId) {
             const res = await fetch(`/api/daily-goals/${goalId}`, {method: 'DELETE'});
             if (res.ok) await loadGoals();
+        }
+
+        // Fitbit integration
+        async function initFitbitUI() {
+            try {
+                const res = await fetch('/api/fitbit/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.available) return;
+                const card = document.getElementById('fitbit-settings-card');
+                card.style.display = 'block';
+                document.getElementById('fitbit-connected').style.display = data.connected ? 'block' : 'none';
+                document.getElementById('fitbit-disconnected').style.display = data.connected ? 'none' : 'block';
+            } catch (e) {
+                console.error('Fitbit UI error:', e);
+            }
+        }
+
+        async function syncFitbit() {
+            const msg = document.getElementById('fitbit-msg');
+            msg.style.color = '#4ecca3';
+            msg.textContent = 'Syncing...';
+            try {
+                const res = await fetch('/api/fitbit/sync', {method: 'POST'});
+                const data = await res.json();
+                if (res.ok) {
+                    msg.style.color = '#4ecca3';
+                    msg.textContent = data.message;
+                    loadData();
+                } else {
+                    msg.style.color = '#e74c3c';
+                    msg.textContent = data.detail || 'Sync failed';
+                }
+            } catch (e) {
+                msg.style.color = '#e74c3c';
+                msg.textContent = 'Sync failed';
+            }
+        }
+
+        async function disconnectFitbit() {
+            const msg = document.getElementById('fitbit-msg');
+            try {
+                const res = await fetch('/api/fitbit', {method: 'DELETE'});
+                if (res.ok) {
+                    msg.style.color = '#4ecca3';
+                    msg.textContent = 'Fitbit disconnected.';
+                    document.getElementById('fitbit-connected').style.display = 'none';
+                    document.getElementById('fitbit-disconnected').style.display = 'block';
+                } else {
+                    msg.style.color = '#e74c3c';
+                    msg.textContent = 'Failed to disconnect';
+                }
+            } catch (e) {
+                msg.style.color = '#e74c3c';
+                msg.textContent = 'Failed to disconnect';
+            }
         }
     </script>
 </body>

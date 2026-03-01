@@ -11,6 +11,9 @@ itsdangerous>=2.1.0
 # Database
 psycopg2-binary>=2.9.9
 
+# HTTP client
+httpx>=0.24.0
+
 # AI
 google-genai>=1.0.0
 

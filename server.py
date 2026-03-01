@@ -1,12 +1,13 @@
 """FastAPI server for makros."""
 
+import asyncio
 import ast
 import base64
 import json
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +21,9 @@ from google import genai
 
 import psycopg2
 
-from auth import router as auth_router
+import httpx
+
+from auth import router as auth_router, oauth, FITBIT_CLIENT_ID, FITBIT_CLIENT_SECRET
 from models import Item, VALID_UNITS
 from notifications import notify_goal_added, notify_goal_completed
 from postgres_storage import PostgresStorage
@@ -97,7 +100,7 @@ SESSION_SECRET_KEY = os.environ.get('SESSION_SECRET_KEY', 'change-me-insecure-de
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
     """Block unauthenticated requests: 401 for API routes, redirect for HTML routes."""
-    PUBLIC_PATHS = {"/login", "/auth/callback", "/logout", "/favicon.ico"}
+    PUBLIC_PATHS = {"/login", "/auth/callback", "/auth/fitbit/callback", "/logout", "/favicon.ico", "/terms", "/privacy"}
     path = request.url.path
     if path in PUBLIC_PATHS or path.startswith("/static"):
         return await call_next(request)
@@ -282,16 +285,69 @@ def log_event(event: str, user_id: str = DEFAULT_USER,
             _events_conn.rollback()
 
 
+_sync_task: Optional[asyncio.Task] = None
+
+
+async def _periodic_fitbit_sync():
+    """Background loop: sync today's weight from Fitbit for all connected users."""
+    while True:
+        await asyncio.sleep(3600)  # every hour
+        if not _fitbit_available():
+            continue
+        try:
+            storage = get_storage()
+            users = storage.get_all_fitbit_users()
+            today = datetime.now().date()
+            for u in users:
+                user_id = u["user_id"]
+                # Skip if weight already set for today
+                if storage.get_weight(user_id, datetime.now()) is not None:
+                    continue
+                tokens = u
+                # Refresh if expired
+                if tokens["expires_at"] < int(time.time()):
+                    tokens = await _refresh_fitbit_token(user_id, tokens)
+                    if not tokens:
+                        continue
+                # Fetch today's weight
+                url = f"https://api.fitbit.com/1/user/-/body/log/weight/date/{today.isoformat()}/{today.isoformat()}.json"
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(url, headers={"Authorization": f"Bearer {tokens['access_token']}"})
+                    if resp.status_code == 401:
+                        tokens = await _refresh_fitbit_token(user_id, tokens)
+                        if not tokens:
+                            continue
+                        resp = await client.get(url, headers={"Authorization": f"Bearer {tokens['access_token']}"})
+                    if resp.status_code != 200:
+                        continue
+                entries = resp.json().get("weight", [])
+                for entry in entries:
+                    weight_kg = entry.get("weight")
+                    date_str = entry.get("date")
+                    if weight_kg is None or not date_str:
+                        continue
+                    weight_lbs = round(weight_kg * 2.20462, 1)
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    storage.set_weight(user_id, weight_lbs, dt)
+                    print(f"[fitbit-sync] Synced {weight_lbs} lbs for user {user_id} on {date_str}")
+        except Exception as e:
+            print(f"[fitbit-sync] Error: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     """Initialize storage on startup."""
+    global _sync_task
     storage = get_storage()
     print(f"Connected to database: {get_storage().db_url}")
+    _sync_task = asyncio.create_task(_periodic_fitbit_sync())
 
 
 @app.on_event("shutdown")
 async def shutdown():
     """Close storage on shutdown."""
+    if _sync_task:
+        _sync_task.cancel()
     if _storage:
         get_storage().close()
     if _events_conn and not _events_conn.closed:
@@ -323,6 +379,20 @@ async def root():
     if index_path.exists():
         return FileResponse(index_path)
     return {"message": "Makros API", "docs": "/docs"}
+
+
+@app.get("/terms")
+async def terms_page():
+    path = WEB_DIR / "terms.html"
+    if path.exists():
+        return FileResponse(path)
+
+
+@app.get("/privacy")
+async def privacy_page():
+    path = WEB_DIR / "privacy.html"
+    if path.exists():
+        return FileResponse(path)
 
 
 @app.get("/items")
@@ -1444,7 +1514,7 @@ async def delete_daily_goal(goal_id: int, req: Request):
 
 
 @app.post("/api/progress-photo")
-async def upload_progress_photo(image: UploadFile = File(...), date: Optional[str] = None):
+async def upload_progress_photo(req: Request, image: UploadFile = File(...), date: Optional[str] = None):
     """Upload a progress photo for a specific date."""
     dt = None
     if date:
@@ -1453,9 +1523,10 @@ async def upload_progress_photo(image: UploadFile = File(...), date: Optional[st
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = get_effective_user_id(req)
     image_data = await image.read()
     db_start = time.time()
-    get_storage().save_progress_photo(dt, image_data)
+    get_storage().save_progress_photo(user_id, dt, image_data)
     db_ms = int((time.time() - db_start) * 1000)
 
     log_event('progress_photo.upload',
@@ -1466,7 +1537,7 @@ async def upload_progress_photo(image: UploadFile = File(...), date: Optional[st
 
 
 @app.get("/api/progress-photo")
-async def get_progress_photo(date: Optional[str] = None):
+async def get_progress_photo(req: Request, date: Optional[str] = None):
     """Get progress photo for a specific date."""
     dt = None
     if date:
@@ -1475,14 +1546,15 @@ async def get_progress_photo(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    image_data = get_storage().get_progress_photo(dt)
+    user_id = get_effective_user_id(req)
+    image_data = get_storage().get_progress_photo(user_id, dt)
     if not image_data:
         raise HTTPException(status_code=404, detail="No progress photo found for this date")
     return Response(content=image_data, media_type="image/jpeg")
 
 
 @app.delete("/api/progress-photo")
-async def delete_progress_photo(date: Optional[str] = None):
+async def delete_progress_photo(req: Request, date: Optional[str] = None):
     """Delete progress photo for a specific date."""
     dt = None
     if date:
@@ -1491,8 +1563,9 @@ async def delete_progress_photo(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
+    user_id = get_effective_user_id(req)
     db_start = time.time()
-    deleted = get_storage().delete_progress_photo(dt)
+    deleted = get_storage().delete_progress_photo(user_id, dt)
     db_ms = int((time.time() - db_start) * 1000)
 
     if deleted:
@@ -1504,7 +1577,7 @@ async def delete_progress_photo(date: Optional[str] = None):
 
 
 @app.get("/api/progress-photo/check")
-async def check_progress_photo(date: Optional[str] = None):
+async def check_progress_photo(req: Request, date: Optional[str] = None):
     """Check if a progress photo exists for a specific date."""
     dt = None
     if date:
@@ -1513,24 +1586,27 @@ async def check_progress_photo(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    image_data = get_storage().get_progress_photo(dt)
+    user_id = get_effective_user_id(req)
+    image_data = get_storage().get_progress_photo(user_id, dt)
     return {"has_photo": image_data is not None}
 
 
 @app.get("/api/progress-photos")
-async def list_progress_photos():
+async def list_progress_photos(req: Request):
     """List all dates that have progress photos, most recent first."""
-    dates = get_storage().get_progress_photo_dates()
+    user_id = get_effective_user_id(req)
+    dates = get_storage().get_progress_photo_dates(user_id)
     return {"dates": dates}
 
 
 @app.post("/api/progress-photos/debug")
-def generate_debug_images():
+def generate_debug_images(req: Request):
     """Generate debug overlay images for all progress photos."""
     from morph_video import generate_debug_images as _generate_debug
 
+    user_id = get_effective_user_id(req)
     storage = get_storage()
-    dates = storage.get_progress_photo_dates()
+    dates = storage.get_progress_photo_dates(user_id)
     if len(dates) < 2:
         raise HTTPException(status_code=400,
                             detail="Need at least 2 progress photos")
@@ -1539,7 +1615,7 @@ def generate_debug_images():
     photo_dates = list(reversed(dates))
     photos = []
     for d in photo_dates:
-        img = storage.get_progress_photo(d)
+        img = storage.get_progress_photo(user_id, d)
         if img:
             photos.append(img)
         else:
@@ -1557,13 +1633,13 @@ def generate_debug_images():
     gen_ms = int((time.time() - start_time) * 1000)
 
     for date_str, debug_bytes in zip(photo_dates, debug_images):
-        storage.save_debug_image(date_str, debug_bytes)
+        storage.save_debug_image(user_id, date_str, debug_bytes)
 
     return {"message": f"Generated {len(debug_images)} debug images", "ms": gen_ms}
 
 
 @app.get("/api/progress-photo/debug")
-async def get_debug_image(date: Optional[str] = None):
+async def get_debug_image(req: Request, date: Optional[str] = None):
     """Get the debug overlay image for a specific date."""
     dt = date or datetime.now().strftime('%Y-%m-%d')
     if date:
@@ -1572,20 +1648,22 @@ async def get_debug_image(date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    image_data = get_storage().get_debug_image(dt)
+    user_id = get_effective_user_id(req)
+    image_data = get_storage().get_debug_image(user_id, dt)
     if not image_data:
         raise HTTPException(status_code=404, detail="No debug image for this date")
     return Response(content=image_data, media_type="image/jpeg")
 
 
 @app.post("/api/progress-video/generate")
-def generate_progress_video():
+def generate_progress_video(req: Request):
     """Generate a morphing progress video from progress photos using local landmark-based morphing."""
     from morph_video import generate_progress_morph_video
 
+    user_id = get_effective_user_id(req)
     storage = get_storage()
 
-    dates = storage.get_progress_photo_dates()
+    dates = storage.get_progress_photo_dates(user_id)
     if len(dates) < 2:
         raise HTTPException(status_code=400,
                             detail="Need at least 2 progress photos to generate a video")
@@ -1597,7 +1675,7 @@ def generate_progress_video():
     photo_dates = list(reversed(dates))
     photos = []
     for d in photo_dates:
-        img = storage.get_progress_photo(d)
+        img = storage.get_progress_photo(user_id, d)
         if img:
             photos.append(img)
 
@@ -2024,6 +2102,154 @@ async def get_item_by_barcode(barcode: str):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     return item.to_dict()
+
+
+# === Fitbit Integration ===
+
+def _fitbit_available() -> bool:
+    return bool(FITBIT_CLIENT_ID and FITBIT_CLIENT_SECRET)
+
+
+async def _refresh_fitbit_token(user_id: int, tokens: dict) -> Optional[dict]:
+    """Refresh expired Fitbit token. Returns new tokens or None on failure."""
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                "https://api.fitbit.com/oauth2/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": tokens["refresh_token"],
+                    "client_id": FITBIT_CLIENT_ID,
+                    "client_secret": FITBIT_CLIENT_SECRET,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if resp.status_code != 200:
+                get_storage().delete_fitbit_tokens(user_id)
+                return None
+            data = resp.json()
+            new_tokens = {
+                "access_token": data["access_token"],
+                "refresh_token": data["refresh_token"],
+                "expires_at": int(time.time()) + data.get("expires_in", 28800),
+            }
+            get_storage().update_fitbit_tokens(
+                user_id, new_tokens["access_token"],
+                new_tokens["refresh_token"], new_tokens["expires_at"],
+            )
+            return new_tokens
+        except Exception:
+            get_storage().delete_fitbit_tokens(user_id)
+            return None
+
+
+@app.get("/api/fitbit/status")
+async def fitbit_status(request: Request):
+    available = _fitbit_available()
+    if not available:
+        return {"available": False, "connected": False}
+    user_id = int(request.session["user_id"])
+    tokens = get_storage().get_fitbit_tokens(user_id)
+    return {"available": True, "connected": tokens is not None}
+
+
+@app.get("/auth/fitbit")
+async def fitbit_login(request: Request):
+    if not _fitbit_available():
+        raise HTTPException(400, "Fitbit integration not configured")
+    if is_in_coach_view(request):
+        raise HTTPException(403, "Cannot connect Fitbit in coach view")
+    redirect_uri = request.url_for("fitbit_callback")
+    return await oauth.fitbit.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/auth/fitbit/callback", name="fitbit_callback")
+async def fitbit_callback(request: Request):
+    if not _fitbit_available():
+        raise HTTPException(400, "Fitbit integration not configured")
+    try:
+        token = await oauth.fitbit.authorize_access_token(request)
+    except Exception as e:
+        print(f"[fitbit] Token exchange failed: {e}")
+        raise HTTPException(500, f"Fitbit token exchange failed: {e}")
+    if "access_token" not in token:
+        print(f"[fitbit] Unexpected token response: {token}")
+        raise HTTPException(500, "Fitbit did not return an access token")
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return RedirectResponse(url="/login", status_code=303)
+    get_storage().save_fitbit_tokens(
+        user_id=int(user_id),
+        fitbit_user_id=token.get("user_id", ""),
+        access_token=token["access_token"],
+        refresh_token=token["refresh_token"],
+        expires_at=int(token.get("expires_at", time.time() + token.get("expires_in", 28800))),
+    )
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.delete("/api/fitbit")
+async def fitbit_disconnect(request: Request):
+    if is_in_coach_view(request):
+        raise HTTPException(403, "Cannot disconnect Fitbit in coach view")
+    user_id = int(request.session["user_id"])
+    get_storage().delete_fitbit_tokens(user_id)
+    return {"message": "Fitbit disconnected"}
+
+
+@app.post("/api/fitbit/sync")
+async def fitbit_sync(request: Request):
+    if not _fitbit_available():
+        raise HTTPException(400, "Fitbit integration not configured")
+    if is_in_coach_view(request):
+        raise HTTPException(403, "Cannot sync Fitbit in coach view")
+    user_id = int(request.session["user_id"])
+    tokens = get_storage().get_fitbit_tokens(user_id)
+    if not tokens:
+        raise HTTPException(400, "Fitbit not connected")
+
+    # Refresh if expired
+    if tokens["expires_at"] < int(time.time()):
+        tokens = await _refresh_fitbit_token(user_id, tokens)
+        if not tokens:
+            raise HTTPException(400, "Fitbit token expired. Please reconnect.")
+
+    # Fetch last 30 days of weight
+    today = datetime.now().date()
+    start = today - timedelta(days=30)
+    url = f"https://api.fitbit.com/1/user/-/body/log/weight/date/{start.isoformat()}/{today.isoformat()}.json"
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        if resp.status_code == 401:
+            tokens = await _refresh_fitbit_token(user_id, tokens)
+            if not tokens:
+                raise HTTPException(400, "Fitbit token expired. Please reconnect.")
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(502, "Failed to fetch weight from Fitbit")
+
+    data = resp.json()
+    entries = data.get("weight", [])
+    storage = get_storage()
+    synced = 0
+    for entry in entries:
+        weight_kg = entry.get("weight")
+        date_str = entry.get("date")
+        if weight_kg is None or not date_str:
+            continue
+        weight_lbs = round(weight_kg * 2.20462, 1)
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        storage.set_weight(user_id, weight_lbs, dt)
+        synced += 1
+
+    return {"message": f"Synced {synced} weight entries from Fitbit", "synced": synced}
 
 
 def create_app():

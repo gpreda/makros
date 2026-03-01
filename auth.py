@@ -12,6 +12,9 @@ from fastapi.responses import RedirectResponse
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
 
+FITBIT_CLIENT_ID = os.environ.get('FITBIT_CLIENT_ID', '')
+FITBIT_CLIENT_SECRET = os.environ.get('FITBIT_CLIENT_SECRET', '')
+
 oauth = OAuth()
 oauth.register(
     name="google",
@@ -20,6 +23,20 @@ oauth.register(
     server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
     client_kwargs={"scope": "openid email profile"},
 )
+
+if FITBIT_CLIENT_ID and FITBIT_CLIENT_SECRET:
+    oauth.register(
+        name="fitbit",
+        client_id=FITBIT_CLIENT_ID,
+        client_secret=FITBIT_CLIENT_SECRET,
+        authorize_url="https://www.fitbit.com/oauth2/authorize",
+        access_token_url="https://api.fitbit.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+        client_kwargs={
+            "scope": "weight",
+            "code_challenge_method": "S256",
+        },
+    )
 
 router = APIRouter(tags=["auth"])
 

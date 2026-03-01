@@ -773,6 +773,20 @@ class PostgresStorage:
                 END $$;
             """)
 
+            # === FITBIT TOKENS TABLE ===
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS fitbit_tokens (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+                    fitbit_user_id TEXT,
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT NOT NULL,
+                    expires_at BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
         self._conn.commit()
 
     def close(self):
@@ -1586,62 +1600,62 @@ class PostgresStorage:
             return [{'date': str(row['date']), 'target_calories': row['target_calories']} for row in cur.fetchall()]
 
     # Progress photo operations
-    def save_progress_photo(self, date, image_data: bytes) -> None:
+    def save_progress_photo(self, user_id: int, date, image_data: bytes) -> None:
         """Save a progress photo for a specific date. Updates if exists, inserts if not."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO progress_photos (date, image_data)
-                VALUES (DATE(%s), %s)
-                ON CONFLICT (date)
+                INSERT INTO progress_photos (user_id, date, image_data)
+                VALUES (%s, DATE(%s), %s)
+                ON CONFLICT (user_id, date)
                 DO UPDATE SET image_data = %s, updated_at = CURRENT_TIMESTAMP
-            """, (date, psycopg2.Binary(image_data), psycopg2.Binary(image_data)))
+            """, (user_id, date, psycopg2.Binary(image_data), psycopg2.Binary(image_data)))
         self.conn.commit()
 
-    def get_progress_photo(self, date) -> Optional[bytes]:
+    def get_progress_photo(self, user_id: int, date) -> Optional[bytes]:
         """Get progress photo for a specific date. Returns raw bytes or None."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
-            cur.execute("SELECT image_data FROM progress_photos WHERE date = DATE(%s)", (date,))
+            cur.execute("SELECT image_data FROM progress_photos WHERE user_id = %s AND date = DATE(%s)", (user_id, date))
             row = cur.fetchone()
             if row and row[0]:
                 return bytes(row[0])
         return None
 
-    def delete_progress_photo(self, date) -> bool:
+    def delete_progress_photo(self, user_id: int, date) -> bool:
         """Delete progress photo for a specific date. Returns True if deleted."""
         if date is None:
             date = datetime.now()
 
         with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM progress_photos WHERE date = DATE(%s)", (date,))
+            cur.execute("DELETE FROM progress_photos WHERE user_id = %s AND date = DATE(%s)", (user_id, date))
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
 
-    def get_progress_photo_dates(self) -> list[str]:
+    def get_progress_photo_dates(self, user_id: int) -> list[str]:
         """Get all dates that have progress photos, most recent first."""
         with self.conn.cursor() as cur:
-            cur.execute("SELECT date FROM progress_photos ORDER BY date DESC")
+            cur.execute("SELECT date FROM progress_photos WHERE user_id = %s ORDER BY date DESC", (user_id,))
             return [str(row[0]) for row in cur.fetchall()]
 
-    def save_debug_image(self, date, image_data: bytes) -> None:
+    def save_debug_image(self, user_id: int, date, image_data: bytes) -> None:
         """Save a debug overlay image for a progress photo date."""
         with self.conn.cursor() as cur:
             cur.execute("""
                 UPDATE progress_photos SET debug_image_data = %s
-                WHERE date = DATE(%s)
-            """, (psycopg2.Binary(image_data), date))
+                WHERE user_id = %s AND date = DATE(%s)
+            """, (psycopg2.Binary(image_data), user_id, date))
         self.conn.commit()
 
-    def get_debug_image(self, date) -> Optional[bytes]:
+    def get_debug_image(self, user_id: int, date) -> Optional[bytes]:
         """Get debug overlay image for a specific date. Returns raw bytes or None."""
         with self.conn.cursor() as cur:
-            cur.execute("SELECT debug_image_data FROM progress_photos WHERE date = DATE(%s)", (date,))
+            cur.execute("SELECT debug_image_data FROM progress_photos WHERE user_id = %s AND date = DATE(%s)", (user_id, date))
             row = cur.fetchone()
             if row and row[0]:
                 return bytes(row[0])
@@ -1858,6 +1872,55 @@ class PostgresStorage:
     def delete_daily_goal(self, goal_id: int, user_id: int) -> bool:
         with self.conn.cursor() as cur:
             cur.execute("DELETE FROM daily_goals WHERE id = %s AND user_id = %s", (goal_id, user_id))
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
+
+    # Fitbit token operations
+    def save_fitbit_tokens(self, user_id: int, fitbit_user_id: str,
+                           access_token: str, refresh_token: str, expires_at: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO fitbit_tokens (user_id, fitbit_user_id, access_token, refresh_token, expires_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    fitbit_user_id = EXCLUDED.fitbit_user_id,
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    expires_at = EXCLUDED.expires_at,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_id, fitbit_user_id, access_token, refresh_token, expires_at))
+        self.conn.commit()
+
+    def get_fitbit_tokens(self, user_id: int) -> Optional[dict]:
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT fitbit_user_id, access_token, refresh_token, expires_at
+                FROM fitbit_tokens WHERE user_id = %s
+            """, (user_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def update_fitbit_tokens(self, user_id: int, access_token: str,
+                             refresh_token: str, expires_at: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE fitbit_tokens
+                SET access_token = %s, refresh_token = %s, expires_at = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s
+            """, (access_token, refresh_token, expires_at, user_id))
+        self.conn.commit()
+
+    def get_all_fitbit_users(self) -> list[dict]:
+        """Return user_id and tokens for all users with Fitbit connected."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT user_id, access_token, refresh_token, expires_at FROM fitbit_tokens")
+            return [dict(row) for row in cur.fetchall()]
+
+    def delete_fitbit_tokens(self, user_id: int) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM fitbit_tokens WHERE user_id = %s", (user_id,))
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
