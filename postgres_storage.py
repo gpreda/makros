@@ -1,8 +1,10 @@
 """PostgreSQL storage for makros."""
 
+import hashlib
 import json
 import os
 import re
+import secrets
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
@@ -42,6 +44,11 @@ class PostgresStorage:
 
     def _init_db(self):
         """Create tables if they don't exist and run migrations."""
+        # Use autocommit so each DDL statement commits immediately and releases locks.
+        # This prevents deadlocks when multiple connections run _init_db() concurrently
+        # (e.g. during --reload restarts).
+        old_autocommit = self._conn.autocommit
+        self._conn.autocommit = True
         with self._conn.cursor() as cur:
             # Users table (must be created first; all data tables reference it)
             cur.execute("""
@@ -783,11 +790,51 @@ class PostgresStorage:
                     refresh_token TEXT NOT NULL,
                     expires_at BIGINT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_sync_at TIMESTAMP,
+                    last_sync_attempt_at TIMESTAMP
+                )
+            """)
+            # Migration: add sync tracking columns if missing
+            cur.execute("""
+                ALTER TABLE fitbit_tokens ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMP
+            """)
+            cur.execute("""
+                ALTER TABLE fitbit_tokens ADD COLUMN IF NOT EXISTS last_sync_attempt_at TIMESTAMP
+            """)
+
+            # Fitbit daily stats (steps, calories burned, resting heart rate)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS fitbit_daily_stats (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    date DATE NOT NULL,
+                    steps INTEGER,
+                    calories_burned INTEGER,
+                    resting_heart_rate INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, date)
                 )
             """)
 
-        self._conn.commit()
+            # API tokens: long-lived bearer tokens for external services.
+            # Only the sha256 hash is stored; the raw token is shown once at creation.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS api_tokens (
+                    id SERIAL PRIMARY KEY,
+                    token_hash CHAR(64) UNIQUE NOT NULL,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used_at TIMESTAMP
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id)"
+            )
+
+        self._conn.autocommit = old_autocommit
 
     def close(self):
         """Close the database connection."""
@@ -1025,20 +1072,33 @@ class PostgresStorage:
             self.conn.rollback()
             raise
 
+    # SQL expression: convert mi.quantity to the item's default_unit so that
+    # macros (stored per default_unit) are multiplied by the correct amount.
+    _EFF_QTY = """(mi.quantity * CASE
+        WHEN mi.unit = i.default_unit THEN 1.0
+        WHEN mi.unit IN ('g','kg','oz','lb') AND i.default_unit IN ('g','kg','oz','lb') THEN
+            (CASE mi.unit WHEN 'g' THEN 1.0 WHEN 'kg' THEN 1000.0 WHEN 'oz' THEN 28.3495 WHEN 'lb' THEN 453.592 END)
+            / (CASE i.default_unit WHEN 'g' THEN 1.0 WHEN 'kg' THEN 1000.0 WHEN 'oz' THEN 28.3495 WHEN 'lb' THEN 453.592 END)
+        WHEN mi.unit IN ('ml','l','fl_oz') AND i.default_unit IN ('ml','l','fl_oz') THEN
+            (CASE mi.unit WHEN 'ml' THEN 1.0 WHEN 'l' THEN 1000.0 WHEN 'fl_oz' THEN 29.5735 END)
+            / (CASE i.default_unit WHEN 'ml' THEN 1.0 WHEN 'l' THEN 1000.0 WHEN 'fl_oz' THEN 29.5735 END)
+        ELSE 1.0
+    END)"""
+
     # SQL fragment for computing nutrition from meal_items -> items
-    _NUTRITION_SUM = """
-        COALESCE(SUM(i.calories * mi.quantity), 0) as total_calories,
-        COALESCE(SUM(i.protein * mi.quantity), 0) as total_protein,
-        COALESCE(SUM(i.carbs * mi.quantity), 0) as total_carbs,
-        COALESCE(SUM(i.fat * mi.quantity), 0) as total_fat,
-        COALESCE(SUM(i.fiber * mi.quantity), 0) as total_fiber,
-        COALESCE(SUM(i.alcohol * mi.quantity), 0) as total_alcohol,
-        COALESCE(SUM(i.saturated_fat * mi.quantity), 0) as total_saturated_fat,
-        COALESCE(SUM(i.trans_fat * mi.quantity), 0) as total_trans_fat,
-        COALESCE(SUM(i.cholesterol * mi.quantity), 0) as total_cholesterol,
-        COALESCE(SUM(i.sodium * mi.quantity), 0) as total_sodium,
-        COALESCE(SUM(i.potassium * mi.quantity), 0) as total_potassium,
-        COALESCE(SUM(i.added_sugar * mi.quantity), 0) as total_added_sugar
+    _NUTRITION_SUM = f"""
+        COALESCE(SUM(i.calories * {_EFF_QTY}), 0) as total_calories,
+        COALESCE(SUM(i.protein * {_EFF_QTY}), 0) as total_protein,
+        COALESCE(SUM(i.carbs * {_EFF_QTY}), 0) as total_carbs,
+        COALESCE(SUM(i.fat * {_EFF_QTY}), 0) as total_fat,
+        COALESCE(SUM(i.fiber * {_EFF_QTY}), 0) as total_fiber,
+        COALESCE(SUM(i.alcohol * {_EFF_QTY}), 0) as total_alcohol,
+        COALESCE(SUM(i.saturated_fat * {_EFF_QTY}), 0) as total_saturated_fat,
+        COALESCE(SUM(i.trans_fat * {_EFF_QTY}), 0) as total_trans_fat,
+        COALESCE(SUM(i.cholesterol * {_EFF_QTY}), 0) as total_cholesterol,
+        COALESCE(SUM(i.sodium * {_EFF_QTY}), 0) as total_sodium,
+        COALESCE(SUM(i.potassium * {_EFF_QTY}), 0) as total_potassium,
+        COALESCE(SUM(i.added_sugar * {_EFF_QTY}), 0) as total_added_sugar
     """
 
     def get_meals(self, user_id: int, limit: int = 50, offset: int = 0,
@@ -1103,26 +1163,26 @@ class PostgresStorage:
             if not meal:
                 return None
 
-            cur.execute("""
+            cur.execute(f"""
                 SELECT mi.id, mi.meal_id, mi.item_id, mi.unit, mi.quantity,
-                       i.name,
-                       COALESCE(i.calories, 0) * mi.quantity as calories,
-                       COALESCE(i.protein, 0) * mi.quantity as protein,
-                       COALESCE(i.carbs, 0) * mi.quantity as carbs,
-                       COALESCE(i.fat, 0) * mi.quantity as fat,
-                       COALESCE(i.fiber, 0) * mi.quantity as fiber,
-                       COALESCE(i.alcohol, 0) * mi.quantity as alcohol,
-                       COALESCE(i.saturated_fat, 0) * mi.quantity as saturated_fat,
-                       COALESCE(i.trans_fat, 0) * mi.quantity as trans_fat,
-                       COALESCE(i.cholesterol, 0) * mi.quantity as cholesterol,
-                       COALESCE(i.sodium, 0) * mi.quantity as sodium,
-                       COALESCE(i.potassium, 0) * mi.quantity as potassium,
-                       COALESCE(i.added_sugar, 0) * mi.quantity as added_sugar
+                       i.name, i.default_unit,
+                       COALESCE(i.calories, 0) * {self._EFF_QTY} as calories,
+                       COALESCE(i.protein, 0) * {self._EFF_QTY} as protein,
+                       COALESCE(i.carbs, 0) * {self._EFF_QTY} as carbs,
+                       COALESCE(i.fat, 0) * {self._EFF_QTY} as fat,
+                       COALESCE(i.fiber, 0) * {self._EFF_QTY} as fiber,
+                       COALESCE(i.alcohol, 0) * {self._EFF_QTY} as alcohol,
+                       COALESCE(i.saturated_fat, 0) * {self._EFF_QTY} as saturated_fat,
+                       COALESCE(i.trans_fat, 0) * {self._EFF_QTY} as trans_fat,
+                       COALESCE(i.cholesterol, 0) * {self._EFF_QTY} as cholesterol,
+                       COALESCE(i.sodium, 0) * {self._EFF_QTY} as sodium,
+                       COALESCE(i.potassium, 0) * {self._EFF_QTY} as potassium,
+                       COALESCE(i.added_sugar, 0) * {self._EFF_QTY} as added_sugar
                 FROM meal_items mi
                 JOIN items i ON mi.item_id = i.id
                 WHERE mi.meal_id = %s ORDER BY mi.id
             """, (meal_id,))
-            items = [dict(row) for row in cur.fetchall()]
+            items = [{k: v for k, v in dict(row).items() if k != 'default_unit'} for row in cur.fetchall()]
 
             return {**dict(meal), 'items': items}
 
@@ -1134,18 +1194,18 @@ class PostgresStorage:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT
-                    COALESCE(SUM(COALESCE(i.calories, 0) * mi.quantity), 0) as calories,
-                    COALESCE(SUM(COALESCE(i.protein, 0) * mi.quantity), 0) as protein,
-                    COALESCE(SUM(COALESCE(i.carbs, 0) * mi.quantity), 0) as carbs,
-                    COALESCE(SUM(COALESCE(i.fat, 0) * mi.quantity), 0) as fat,
-                    COALESCE(SUM(COALESCE(i.fiber, 0) * mi.quantity), 0) as fiber,
-                    COALESCE(SUM(COALESCE(i.alcohol, 0) * mi.quantity), 0) as alcohol,
-                    COALESCE(SUM(COALESCE(i.saturated_fat, 0) * mi.quantity), 0) as saturated_fat,
-                    COALESCE(SUM(COALESCE(i.trans_fat, 0) * mi.quantity), 0) as trans_fat,
-                    COALESCE(SUM(COALESCE(i.cholesterol, 0) * mi.quantity), 0) as cholesterol,
-                    COALESCE(SUM(COALESCE(i.sodium, 0) * mi.quantity), 0) as sodium,
-                    COALESCE(SUM(COALESCE(i.potassium, 0) * mi.quantity), 0) as potassium,
-                    COALESCE(SUM(COALESCE(i.added_sugar, 0) * mi.quantity), 0) as added_sugar,
+                    COALESCE(SUM(COALESCE(i.calories, 0) * {self._EFF_QTY}), 0) as calories,
+                    COALESCE(SUM(COALESCE(i.protein, 0) * {self._EFF_QTY}), 0) as protein,
+                    COALESCE(SUM(COALESCE(i.carbs, 0) * {self._EFF_QTY}), 0) as carbs,
+                    COALESCE(SUM(COALESCE(i.fat, 0) * {self._EFF_QTY}), 0) as fat,
+                    COALESCE(SUM(COALESCE(i.fiber, 0) * {self._EFF_QTY}), 0) as fiber,
+                    COALESCE(SUM(COALESCE(i.alcohol, 0) * {self._EFF_QTY}), 0) as alcohol,
+                    COALESCE(SUM(COALESCE(i.saturated_fat, 0) * {self._EFF_QTY}), 0) as saturated_fat,
+                    COALESCE(SUM(COALESCE(i.trans_fat, 0) * {self._EFF_QTY}), 0) as trans_fat,
+                    COALESCE(SUM(COALESCE(i.cholesterol, 0) * {self._EFF_QTY}), 0) as cholesterol,
+                    COALESCE(SUM(COALESCE(i.sodium, 0) * {self._EFF_QTY}), 0) as sodium,
+                    COALESCE(SUM(COALESCE(i.potassium, 0) * {self._EFF_QTY}), 0) as potassium,
+                    COALESCE(SUM(COALESCE(i.added_sugar, 0) * {self._EFF_QTY}), 0) as added_sugar,
                     COUNT(DISTINCT m.id) as meal_count
                 FROM meals m
                 LEFT JOIN meal_items mi ON mi.meal_id = m.id
@@ -1160,20 +1220,20 @@ class PostgresStorage:
             date = datetime.now()
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT mi.id, mi.meal_id, mi.item_id, i.name, mi.quantity, mi.unit,
-                       COALESCE(i.calories, 0) * mi.quantity as calories,
-                       COALESCE(i.protein, 0) * mi.quantity as protein,
-                       COALESCE(i.carbs, 0) * mi.quantity as carbs,
-                       COALESCE(i.fat, 0) * mi.quantity as fat,
-                       COALESCE(i.fiber, 0) * mi.quantity as fiber,
-                       COALESCE(i.alcohol, 0) * mi.quantity as alcohol,
-                       COALESCE(i.saturated_fat, 0) * mi.quantity as saturated_fat,
-                       COALESCE(i.trans_fat, 0) * mi.quantity as trans_fat,
-                       COALESCE(i.cholesterol, 0) * mi.quantity as cholesterol,
-                       COALESCE(i.sodium, 0) * mi.quantity as sodium,
-                       COALESCE(i.potassium, 0) * mi.quantity as potassium,
-                       COALESCE(i.added_sugar, 0) * mi.quantity as added_sugar
+                       COALESCE(i.calories, 0) * {self._EFF_QTY} as calories,
+                       COALESCE(i.protein, 0) * {self._EFF_QTY} as protein,
+                       COALESCE(i.carbs, 0) * {self._EFF_QTY} as carbs,
+                       COALESCE(i.fat, 0) * {self._EFF_QTY} as fat,
+                       COALESCE(i.fiber, 0) * {self._EFF_QTY} as fiber,
+                       COALESCE(i.alcohol, 0) * {self._EFF_QTY} as alcohol,
+                       COALESCE(i.saturated_fat, 0) * {self._EFF_QTY} as saturated_fat,
+                       COALESCE(i.trans_fat, 0) * {self._EFF_QTY} as trans_fat,
+                       COALESCE(i.cholesterol, 0) * {self._EFF_QTY} as cholesterol,
+                       COALESCE(i.sodium, 0) * {self._EFF_QTY} as sodium,
+                       COALESCE(i.potassium, 0) * {self._EFF_QTY} as potassium,
+                       COALESCE(i.added_sugar, 0) * {self._EFF_QTY} as added_sugar
                 FROM meal_items mi
                 JOIN items i ON mi.item_id = i.id
                 JOIN meals m ON mi.meal_id = m.id
@@ -1185,20 +1245,20 @@ class PostgresStorage:
     def get_meal_item(self, item_id: int) -> Optional[dict]:
         """Get a single meal item by ID with computed macros from items table."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT mi.id, mi.meal_id, mi.item_id, i.name, mi.quantity, mi.unit,
-                       COALESCE(i.calories, 0) * mi.quantity as calories,
-                       COALESCE(i.protein, 0) * mi.quantity as protein,
-                       COALESCE(i.carbs, 0) * mi.quantity as carbs,
-                       COALESCE(i.fat, 0) * mi.quantity as fat,
-                       COALESCE(i.fiber, 0) * mi.quantity as fiber,
-                       COALESCE(i.alcohol, 0) * mi.quantity as alcohol,
-                       COALESCE(i.saturated_fat, 0) * mi.quantity as saturated_fat,
-                       COALESCE(i.trans_fat, 0) * mi.quantity as trans_fat,
-                       COALESCE(i.cholesterol, 0) * mi.quantity as cholesterol,
-                       COALESCE(i.sodium, 0) * mi.quantity as sodium,
-                       COALESCE(i.potassium, 0) * mi.quantity as potassium,
-                       COALESCE(i.added_sugar, 0) * mi.quantity as added_sugar
+                       COALESCE(i.calories, 0) * {self._EFF_QTY} as calories,
+                       COALESCE(i.protein, 0) * {self._EFF_QTY} as protein,
+                       COALESCE(i.carbs, 0) * {self._EFF_QTY} as carbs,
+                       COALESCE(i.fat, 0) * {self._EFF_QTY} as fat,
+                       COALESCE(i.fiber, 0) * {self._EFF_QTY} as fiber,
+                       COALESCE(i.alcohol, 0) * {self._EFF_QTY} as alcohol,
+                       COALESCE(i.saturated_fat, 0) * {self._EFF_QTY} as saturated_fat,
+                       COALESCE(i.trans_fat, 0) * {self._EFF_QTY} as trans_fat,
+                       COALESCE(i.cholesterol, 0) * {self._EFF_QTY} as cholesterol,
+                       COALESCE(i.sodium, 0) * {self._EFF_QTY} as sodium,
+                       COALESCE(i.potassium, 0) * {self._EFF_QTY} as potassium,
+                       COALESCE(i.added_sugar, 0) * {self._EFF_QTY} as added_sugar
                 FROM meal_items mi
                 JOIN items i ON mi.item_id = i.id
                 WHERE mi.id = %s
@@ -1414,9 +1474,9 @@ class PostgresStorage:
         """Get daily calories history. If days is None, returns all history.
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            base = """
+            base = f"""
                 SELECT DATE(COALESCE(m.local_logged_at, m.logged_at)) as date,
-                       SUM(COALESCE(i.calories, 0) * mi.quantity) as calories
+                       SUM(COALESCE(i.calories, 0) * {self._EFF_QTY}) as calories
                 FROM meals m
                 JOIN meal_items mi ON mi.meal_id = m.id
                 JOIN items i ON mi.item_id = i.id
@@ -1439,20 +1499,20 @@ class PostgresStorage:
         """Get daily macros history for all nutrients. If days is None, returns all history.
         Excludes today since the day is not complete."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            base = """
+            base = f"""
                 SELECT DATE(COALESCE(m.local_logged_at, m.logged_at)) as date,
-                    SUM(COALESCE(i.calories, 0) * mi.quantity) as calories,
-                    SUM(COALESCE(i.protein, 0) * mi.quantity) as protein,
-                    SUM(COALESCE(i.carbs, 0) * mi.quantity) as carbs,
-                    SUM(COALESCE(i.fat, 0) * mi.quantity) as fat,
-                    SUM(COALESCE(i.fiber, 0) * mi.quantity) as fiber,
-                    SUM(COALESCE(i.alcohol, 0) * mi.quantity) as alcohol,
-                    SUM(COALESCE(i.saturated_fat, 0) * mi.quantity) as saturated_fat,
-                    SUM(COALESCE(i.trans_fat, 0) * mi.quantity) as trans_fat,
-                    SUM(COALESCE(i.cholesterol, 0) * mi.quantity) as cholesterol,
-                    SUM(COALESCE(i.sodium, 0) * mi.quantity) as sodium,
-                    SUM(COALESCE(i.potassium, 0) * mi.quantity) as potassium,
-                    SUM(COALESCE(i.added_sugar, 0) * mi.quantity) as added_sugar
+                    SUM(COALESCE(i.calories, 0) * {self._EFF_QTY}) as calories,
+                    SUM(COALESCE(i.protein, 0) * {self._EFF_QTY}) as protein,
+                    SUM(COALESCE(i.carbs, 0) * {self._EFF_QTY}) as carbs,
+                    SUM(COALESCE(i.fat, 0) * {self._EFF_QTY}) as fat,
+                    SUM(COALESCE(i.fiber, 0) * {self._EFF_QTY}) as fiber,
+                    SUM(COALESCE(i.alcohol, 0) * {self._EFF_QTY}) as alcohol,
+                    SUM(COALESCE(i.saturated_fat, 0) * {self._EFF_QTY}) as saturated_fat,
+                    SUM(COALESCE(i.trans_fat, 0) * {self._EFF_QTY}) as trans_fat,
+                    SUM(COALESCE(i.cholesterol, 0) * {self._EFF_QTY}) as cholesterol,
+                    SUM(COALESCE(i.sodium, 0) * {self._EFF_QTY}) as sodium,
+                    SUM(COALESCE(i.potassium, 0) * {self._EFF_QTY}) as potassium,
+                    SUM(COALESCE(i.added_sugar, 0) * {self._EFF_QTY}) as added_sugar
                 FROM meals m
                 JOIN meal_items mi ON mi.meal_id = m.id
                 JOIN items i ON mi.item_id = i.id
@@ -1772,6 +1832,99 @@ class PostgresStorage:
             cur.execute("SELECT id, email, name FROM users WHERE id = %s", (user_id,))
             return cur.fetchone()
 
+    def get_or_create_user_by_google(self, google_id: str, email: str, name: str) -> int:
+        """Find or create a user by Google ID, falling back to email match.
+
+        Mirrors auth.get_or_create_user but reuses this storage's connection.
+        Used by Bearer (Google ID token) auth for API access by external services.
+        Returns the user's integer id.
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # 1. Match by google_id (subsequent logins)
+            cur.execute("SELECT id FROM users WHERE google_id = %s", (google_id,))
+            user = cur.fetchone()
+            if user:
+                cur.execute(
+                    "UPDATE users SET email = %s, name = %s WHERE id = %s",
+                    (email, name, user['id'])
+                )
+                self.conn.commit()
+                return user['id']
+
+            # 2. Match by email with no google_id (first link of the seeded user)
+            cur.execute(
+                "SELECT id FROM users WHERE email = %s AND google_id IS NULL",
+                (email,)
+            )
+            user = cur.fetchone()
+            if user:
+                cur.execute(
+                    "UPDATE users SET google_id = %s, name = %s WHERE id = %s",
+                    (google_id, name, user['id'])
+                )
+                self.conn.commit()
+                return user['id']
+
+            # 3. New user
+            cur.execute(
+                "INSERT INTO users (google_id, email, name) VALUES (%s, %s, %s) RETURNING id",
+                (google_id, email, name)
+            )
+            user_id = cur.fetchone()['id']
+        self.conn.commit()
+        return user_id
+
+    # API token operations (long-lived bearer tokens for external services)
+    def create_api_token(self, user_id: int, name: str) -> tuple[str, int]:
+        """Create a long-lived API token for a user. Returns (raw_token, token_id).
+
+        The raw token is shown only once; only its sha256 hash is stored.
+        """
+        raw = "mk_" + secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw.encode()).hexdigest()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO api_tokens (token_hash, user_id, name) VALUES (%s, %s, %s) RETURNING id",
+                (token_hash, user_id, name),
+            )
+            token_id = cur.fetchone()[0]
+        self.conn.commit()
+        return raw, token_id
+
+    def get_user_id_by_api_token(self, token: str) -> Optional[int]:
+        """Validate an API token and return its user_id (updating last_used_at), or None."""
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE api_tokens SET last_used_at = CURRENT_TIMESTAMP "
+                "WHERE token_hash = %s RETURNING user_id",
+                (token_hash,),
+            )
+            row = cur.fetchone()
+        self.conn.commit()
+        return row[0] if row else None
+
+    def list_api_tokens(self, user_id: int) -> list[dict]:
+        """List a user's API tokens (without the hash)."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, name, created_at, last_used_at FROM api_tokens "
+                "WHERE user_id = %s ORDER BY created_at DESC",
+                (user_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def revoke_api_token(self, user_id: int, token_id: int) -> bool:
+        """Delete an API token. Only the owning user can revoke their tokens."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM api_tokens WHERE id = %s AND user_id = %s",
+                (token_id, user_id),
+            )
+            deleted = cur.rowcount > 0
+        self.conn.commit()
+        return deleted
+
     # Coach management operations
     def add_coach(self, client_id: int, coach_email: str) -> dict:
         """Add a coach by email. Returns coach user info or raises ValueError."""
@@ -1895,7 +2048,8 @@ class PostgresStorage:
     def get_fitbit_tokens(self, user_id: int) -> Optional[dict]:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT fitbit_user_id, access_token, refresh_token, expires_at
+                SELECT fitbit_user_id, access_token, refresh_token, expires_at,
+                       last_sync_at, last_sync_attempt_at
                 FROM fitbit_tokens WHERE user_id = %s
             """, (user_id,))
             row = cur.fetchone()
@@ -1916,7 +2070,26 @@ class PostgresStorage:
         """Return user_id and tokens for all users with Fitbit connected."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT user_id, access_token, refresh_token, expires_at FROM fitbit_tokens")
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+        self.conn.commit()
+        return rows
+
+    def update_fitbit_sync_times(self, user_id: int, synced: bool) -> None:
+        """Update last_sync_attempt_at always, and last_sync_at only if synced=True."""
+        with self.conn.cursor() as cur:
+            if synced:
+                cur.execute("""
+                    UPDATE fitbit_tokens
+                    SET last_sync_at = CURRENT_TIMESTAMP, last_sync_attempt_at = CURRENT_TIMESTAMP
+                    WHERE user_id = %s
+                """, (user_id,))
+            else:
+                cur.execute("""
+                    UPDATE fitbit_tokens
+                    SET last_sync_attempt_at = CURRENT_TIMESTAMP
+                    WHERE user_id = %s
+                """, (user_id,))
+        self.conn.commit()
 
     def delete_fitbit_tokens(self, user_id: int) -> bool:
         with self.conn.cursor() as cur:
@@ -1924,3 +2097,57 @@ class PostgresStorage:
             deleted = cur.rowcount > 0
         self.conn.commit()
         return deleted
+
+    def upsert_fitbit_daily_stats(self, user_id: int, date_str: str,
+                                   steps: Optional[int] = None,
+                                   calories_burned: Optional[int] = None,
+                                   resting_heart_rate: Optional[int] = None) -> None:
+        """Upsert Fitbit daily stats, using COALESCE to preserve partial data."""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO fitbit_daily_stats (user_id, date, steps, calories_burned, resting_heart_rate)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, date)
+                DO UPDATE SET
+                    steps = COALESCE(%s, fitbit_daily_stats.steps),
+                    calories_burned = COALESCE(%s, fitbit_daily_stats.calories_burned),
+                    resting_heart_rate = COALESCE(%s, fitbit_daily_stats.resting_heart_rate),
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_id, date_str, steps, calories_burned, resting_heart_rate,
+                  steps, calories_burned, resting_heart_rate))
+        self.conn.commit()
+
+    def get_fitbit_daily_stats(self, user_id: int, date_str: str) -> Optional[dict]:
+        """Get Fitbit daily stats for a single day."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT steps, calories_burned, resting_heart_rate
+                FROM fitbit_daily_stats
+                WHERE user_id = %s AND date = %s
+            """, (user_id, date_str))
+            row = cur.fetchone()
+            if row:
+                return dict(row)
+            return None
+
+    def get_fitbit_stats_history(self, user_id: int, days: Optional[int] = None) -> list[dict]:
+        """Get Fitbit daily stats history. If days is None, returns all history."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if days:
+                cur.execute("""
+                    SELECT date, steps, calories_burned, resting_heart_rate
+                    FROM fitbit_daily_stats
+                    WHERE user_id = %s AND date >= CURRENT_DATE - %s * INTERVAL '1 day'
+                    ORDER BY date ASC
+                """, (user_id, days))
+            else:
+                cur.execute("""
+                    SELECT date, steps, calories_burned, resting_heart_rate
+                    FROM fitbit_daily_stats
+                    WHERE user_id = %s
+                    ORDER BY date ASC
+                """, (user_id,))
+            return [{'date': str(row['date']), 'steps': row['steps'],
+                     'calories_burned': row['calories_burned'],
+                     'resting_heart_rate': row['resting_heart_rate']}
+                    for row in cur.fetchall()]

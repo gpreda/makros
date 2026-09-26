@@ -77,3 +77,27 @@ def notify_goal_completed(coach_email: str, coach_name: str, client_name: str,
             print(f"[notifications] Failed to send completion email to {coach_email}: {e}")
 
     threading.Thread(target=_send, daemon=True).start()
+
+
+def notify_fitbit_sync_failed(user_email: str, user_name: str, user_id: int):
+    """Notify user when periodic Fitbit sync pulled no new data. Never raises."""
+    if not SMTP_EMAIL or not SMTP_PASSWORD:
+        return
+
+    subject = "Fitbit sync issue – no new data"
+    html_body = f"""\
+<html><body>
+<p>Hi {user_name or "there"},</p>
+<p>Your scheduled Fitbit sync just ran but didn't pull any new data.
+This usually means your Fitbit token has expired or been revoked.</p>
+<p>Please <a href="https://makros.pr3da.com">open Makros</a> and reconnect your Fitbit
+in Settings to resume automatic syncing.</p>
+</body></html>"""
+
+    def _send():
+        try:
+            send_email(user_email, subject, html_body)
+        except Exception as e:
+            print(f"[notifications] Failed to send Fitbit sync email to {user_email}: {e}")
+
+    threading.Thread(target=_send, daemon=True).start()

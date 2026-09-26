@@ -4,6 +4,7 @@ import asyncio
 import ast
 import base64
 import json
+import logging
 import os
 import time
 import uuid
@@ -23,11 +24,13 @@ import psycopg2
 
 import httpx
 
-from auth import router as auth_router, oauth, FITBIT_CLIENT_ID, FITBIT_CLIENT_SECRET
+from auth import router as auth_router, oauth, GOOGLE_CLIENT_ID, FITBIT_CLIENT_ID, FITBIT_CLIENT_SECRET
 from models import Item, VALID_UNITS
-from notifications import notify_goal_added, notify_goal_completed
+from notifications import notify_goal_added, notify_goal_completed, notify_fitbit_sync_failed
 from postgres_storage import PostgresStorage
 
+logger = logging.getLogger("makros")
+default_gemini_model = 'gemini-3.5-flash'
 
 # Pydantic models for API
 class AnalyzeRequest(BaseModel):
@@ -99,11 +102,35 @@ SESSION_SECRET_KEY = os.environ.get('SESSION_SECRET_KEY', 'change-me-insecure-de
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
-    """Block unauthenticated requests: 401 for API routes, redirect for HTML routes."""
+    """Authenticate each request via one of two methods:
+
+    - Bearer: a Google ID token in `Authorization: Bearer ...` for /api routes,
+      used by external services. Resolves to a user_id stored on request.state.
+    - Session: the Google-OAuth login cookie used by the web UI.
+
+    Unauthenticated API requests get 401; HTML routes redirect to /login.
+    """
     PUBLIC_PATHS = {"/login", "/auth/callback", "/auth/fitbit/callback", "/logout", "/favicon.ico", "/terms", "/privacy"}
     path = request.url.path
     if path in PUBLIC_PATHS or path.startswith("/static"):
         return await call_next(request)
+
+    # Bearer auth for API routes — used by external services. Accepts either a
+    # long-lived app API token (DB-backed) or a short-lived Google ID token.
+    if path.startswith("/api/"):
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer "):].strip()
+            user_id = _resolve_long_lived_token(token)
+            if user_id is None:
+                user_id = await _resolve_google_bearer(token)
+            if user_id is None:
+                return JSONResponse({"detail": "Invalid or expired token"}, status_code=401)
+            request.state.user_id = user_id
+            request.state.auth_method = "bearer"
+            return await call_next(request)
+
+    # Session (cookie) auth — used by the web UI.
     if not request.session.get("user_id"):
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
@@ -132,8 +159,76 @@ def get_storage() -> PostgresStorage:
     return _storage
 
 
+# Expected audience for Bearer (Google ID token) auth. Defaults to the app's
+# own OAuth client ID; set API_TOKEN_AUDIENCE to accept service-account ID tokens
+# that use a custom audience.
+_API_TOKEN_AUDIENCE = os.environ.get('API_TOKEN_AUDIENCE') or GOOGLE_CLIENT_ID
+
+# In-process cache: google_id -> (user_id, expires_at), to avoid a DB hit on
+# every Bearer-authed request from the same service.
+_bearer_user_cache: dict[str, tuple[int, float]] = {}
+_BEARER_CACHE_TTL = 300  # seconds
+
+
+def _resolve_long_lived_token(token: str) -> Optional[int]:
+    """Validate a long-lived app API token (DB-backed). Returns user_id or None."""
+    if not token:
+        return None
+    try:
+        return get_storage().get_user_id_by_api_token(token)
+    except Exception as e:
+        logger.error(f"[bearer] API token lookup failed: {e}", exc_info=True)
+        return None
+
+
+async def _resolve_google_bearer(token: str) -> Optional[int]:
+    """Validate a Google ID token and return the local user_id, or None."""
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests as grequests
+        idinfo = await asyncio.to_thread(
+            id_token.verify_oauth2_token, token, grequests.Request(), _API_TOKEN_AUDIENCE
+        )
+    except Exception as e:
+        logger.warning(f"[bearer] token verification failed: {e}")
+        return None
+    google_id = idinfo.get("sub")
+    if not google_id:
+        return None
+    now = time.time()
+    cached = _bearer_user_cache.get(google_id)
+    if cached and cached[1] > now:
+        return cached[0]
+    email = idinfo.get("email") or ""
+    name = idinfo.get("name") or email
+    try:
+        user_id = get_storage().get_or_create_user_by_google(google_id, email, name)
+    except Exception as e:
+        logger.error(f"[bearer] user resolution failed: {e}", exc_info=True)
+        return None
+    _bearer_user_cache[google_id] = (user_id, now + _BEARER_CACHE_TTL)
+    return user_id
+
+
+def get_auth_user_id(request: Request) -> int:
+    """The authenticated user's own id (the coach, not the viewed client).
+
+    Works for both session (web UI) and Bearer (Google token, API) auth.
+    """
+    uid = getattr(request.state, "user_id", None)
+    if uid is not None:
+        return int(uid)
+    return int(request.session["user_id"])
+
+
 def get_effective_user_id(request: Request) -> int:
-    """Returns the user_id to use for data ops. Coach view uses client's ID."""
+    """Returns the user_id to use for data ops. Coach view uses client's ID.
+
+    Bearer-authed requests have no coach view, so the token's user is used.
+    """
+    uid = getattr(request.state, "user_id", None)
+    if uid is not None:
+        return int(uid)
     viewing_as = request.session.get("coach_viewing_as")
     if viewing_as:
         return int(viewing_as)
@@ -290,48 +385,26 @@ _sync_task: Optional[asyncio.Task] = None
 
 async def _periodic_fitbit_sync():
     """Background loop: sync today's weight from Fitbit for all connected users."""
+    await asyncio.sleep(60)  # wait 1 min for startup
     while True:
-        await asyncio.sleep(3600)  # every hour
         if not _fitbit_available():
+            await asyncio.sleep(3600)
             continue
         try:
             storage = get_storage()
             users = storage.get_all_fitbit_users()
-            today = datetime.now().date()
+            logger.info(f"[fitbit-sync] Starting sync for {len(users)} user(s)")
             for u in users:
                 user_id = u["user_id"]
-                # Skip if weight already set for today
-                if storage.get_weight(user_id, datetime.now()) is not None:
-                    continue
-                tokens = u
-                # Refresh if expired
-                if tokens["expires_at"] < int(time.time()):
-                    tokens = await _refresh_fitbit_token(user_id, tokens)
-                    if not tokens:
-                        continue
-                # Fetch today's weight
-                url = f"https://api.fitbit.com/1/user/-/body/log/weight/date/{today.isoformat()}/{today.isoformat()}.json"
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(url, headers={"Authorization": f"Bearer {tokens['access_token']}"})
-                    if resp.status_code == 401:
-                        tokens = await _refresh_fitbit_token(user_id, tokens)
-                        if not tokens:
-                            continue
-                        resp = await client.get(url, headers={"Authorization": f"Bearer {tokens['access_token']}"})
-                    if resp.status_code != 200:
-                        continue
-                entries = resp.json().get("weight", [])
-                for entry in entries:
-                    weight_kg = entry.get("weight")
-                    date_str = entry.get("date")
-                    if weight_kg is None or not date_str:
-                        continue
-                    weight_lbs = round(weight_kg * 2.20462, 1)
-                    dt = datetime.strptime(date_str, "%Y-%m-%d")
-                    storage.set_weight(user_id, weight_lbs, dt)
-                    print(f"[fitbit-sync] Synced {weight_lbs} lbs for user {user_id} on {date_str}")
+                synced, any_data = await _sync_fitbit_user(user_id, u, days=3)
+                logger.info(f"[fitbit-sync] User {user_id}: synced {synced} weight entries, any_data={any_data}")
+                if not any_data:
+                    user_info = storage.get_user_by_id(user_id)
+                    if user_info:
+                        notify_fitbit_sync_failed(user_info["email"], user_info.get("name", ""), user_id)
         except Exception as e:
-            print(f"[fitbit-sync] Error: {e}")
+            logger.error(f"[fitbit-sync] Error: {e}", exc_info=True)
+        await asyncio.sleep(3600)  # every hour
 
 
 @app.on_event("startup")
@@ -357,7 +430,7 @@ async def shutdown():
 @app.get("/api/me")
 async def get_current_user(request: Request):
     """Return the current authenticated user's profile."""
-    user_id = request.session.get("user_id")
+    user_id = get_auth_user_id(request)
     storage = get_storage()
     with storage.conn.cursor() as cur:
         cur.execute("SELECT id, email, name FROM users WHERE id = %s", (user_id,))
@@ -365,6 +438,36 @@ async def get_current_user(request: Request):
     if not row:
         raise HTTPException(status_code=401, detail="User not found")
     return {"id": row[0], "email": row[1], "name": row[2]}
+
+
+class CreateTokenRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/tokens")
+async def create_api_token_endpoint(req: CreateTokenRequest, request: Request):
+    """Create a long-lived API token. The raw token is returned ONLY here."""
+    user_id = get_auth_user_id(request)
+    raw, token_id = get_storage().create_api_token(user_id, req.name)
+    log_event("api_token.create", user_id=str(user_id), token_id=token_id, name=req.name)
+    return {"token": raw, "id": token_id, "name": req.name}
+
+
+@app.get("/api/tokens")
+async def list_api_tokens_endpoint(request: Request):
+    """List the caller's API tokens (hashes are never exposed)."""
+    user_id = get_auth_user_id(request)
+    return get_storage().list_api_tokens(user_id)
+
+
+@app.delete("/api/tokens/{token_id}")
+async def revoke_api_token_endpoint(token_id: int, request: Request):
+    """Revoke (delete) an API token by id."""
+    user_id = get_auth_user_id(request)
+    if not get_storage().revoke_api_token(user_id, token_id):
+        raise HTTPException(status_code=404, detail="Token not found")
+    log_event("api_token.revoke", user_id=str(user_id), token_id=token_id)
+    return {"ok": True}
 
 
 # Mount static files
@@ -608,7 +711,7 @@ Be accurate with portion sizes. Use standard nutritional databases as reference.
 Return ONLY the dictionary, no other text or markdown.
 """
 
-    model_name = 'gemini-2.0-flash'
+    model_name = default_gemini_model
     try:
         start_time = time.time()
         response = client.models.generate_content(
@@ -743,7 +846,7 @@ Respond with ONLY a Python dictionary in this exact format:
 Return ONLY the dictionary, no other text or markdown.
 """
 
-    model_name = 'gemini-2.0-flash'
+    model_name = default_gemini_model
 
     # Create the image part for Gemini
     image_part = {
@@ -825,7 +928,7 @@ async def log_meal_endpoint(request: LogMealRequest, req: Request):
         raise HTTPException(status_code=403, detail="Coaches cannot log meals for clients")
     try:
         storage = get_storage()
-        user_id = int(req.session["user_id"])
+        user_id = get_auth_user_id(req)
 
         # Use browser's date if provided, otherwise fall back to server time
         meal_datetime = None
@@ -835,9 +938,13 @@ async def log_meal_endpoint(request: LogMealRequest, req: Request):
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
         # Parse browser's local datetime if provided
+        # If a specific date was provided (e.g. user navigated to a past day),
+        # override local_logged_at to use that date so the meal appears on the correct day
         local_logged_at = None
         if request.local_time:
             local_logged_at = datetime.fromisoformat(request.local_time)
+        if meal_datetime and local_logged_at:
+            local_logged_at = local_logged_at.replace(year=meal_datetime.year, month=meal_datetime.month, day=meal_datetime.day)
 
         # Generate smart meal name from items
         meal_name = generate_smart_meal_name(request.items)
@@ -883,7 +990,7 @@ async def log_meal_with_image(
         raise HTTPException(status_code=403, detail="Coaches cannot log meals for clients")
     try:
         storage = get_storage()
-        user_id = int(req.session["user_id"])
+        user_id = get_auth_user_id(req)
 
         # Parse JSON strings
         items_list = json.loads(items)
@@ -896,9 +1003,13 @@ async def log_meal_with_image(
             meal_datetime = meal_date.replace(hour=now.hour, minute=now.minute, second=now.second)
 
         # Parse browser's local datetime if provided
+        # If a specific date was provided (e.g. user navigated to a past day),
+        # override local_logged_at to use that date so the meal appears on the correct day
         local_logged_at = None
         if local_time:
             local_logged_at = datetime.fromisoformat(local_time)
+        if meal_datetime and local_logged_at:
+            local_logged_at = local_logged_at.replace(year=meal_datetime.year, month=meal_datetime.month, day=meal_datetime.day)
 
         # Read image data if provided
         image_data = None
@@ -1108,7 +1219,7 @@ async def set_weight(request: WeightRequest, req: Request, date: Optional[str] =
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    user_id = int(req.session["user_id"])
+    user_id = get_auth_user_id(req)
     db_start = time.time()
     get_storage().set_weight(user_id, request.weight_lbs, dt)
     db_ms = int((time.time() - db_start) * 1000)
@@ -1133,7 +1244,7 @@ async def delete_weight(req: Request, date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    user_id = int(req.session["user_id"])
+    user_id = get_auth_user_id(req)
     db_start = time.time()
     deleted = get_storage().delete_weight(user_id, dt)
     db_ms = int((time.time() - db_start) * 1000)
@@ -1233,7 +1344,7 @@ async def add_exercise(request: ExerciseRequest, req: Request, date: Optional[st
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format")
 
-    user_id = int(req.session["user_id"])
+    user_id = get_auth_user_id(req)
     # Get weight for calorie calculation, falling back to last known weight
     weight = get_storage().get_latest_weight(user_id, dt)
     if not weight:
@@ -1361,7 +1472,7 @@ async def get_caloric_target_history(req: Request, days: Optional[int] = None):
 @app.get("/api/coach/status")
 async def coach_status(request: Request):
     """Returns current coach/client view state."""
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     viewing_as_id = request.session.get("coach_viewing_as")
     clients = get_storage().get_clients(user_id)
     viewing_as = None
@@ -1379,7 +1490,7 @@ async def coach_view_as(request: Request):
     """Set coach view mode: coach starts viewing a specific client's data."""
     body = await request.json()
     client_id = int(body["client_id"])
-    coach_id = int(request.session["user_id"])
+    coach_id = get_auth_user_id(request)
     if not get_storage().is_coach_of(coach_id, client_id):
         raise HTTPException(status_code=403, detail="Not a coach for this user")
     request.session["coach_viewing_as"] = client_id
@@ -1397,13 +1508,13 @@ async def coach_exit_view(request: Request):
 
 @app.get("/api/coaches")
 async def list_coaches(request: Request):
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     return {"coaches": get_storage().get_coaches(user_id)}
 
 
 @app.post("/api/coaches")
 async def add_coach(body: AddCoachRequest, request: Request):
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     try:
         coach = get_storage().add_coach(user_id, body.email)
     except ValueError as e:
@@ -1413,7 +1524,7 @@ async def add_coach(body: AddCoachRequest, request: Request):
 
 @app.delete("/api/coaches/{coach_id}")
 async def remove_coach(coach_id: int, request: Request):
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     if not get_storage().remove_coach(user_id, coach_id):
         raise HTTPException(status_code=404, detail="Coach relationship not found")
     return {"message": "Coach removed"}
@@ -1421,7 +1532,7 @@ async def remove_coach(coach_id: int, request: Request):
 
 @app.get("/api/clients")
 async def list_clients(request: Request):
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     return {"clients": get_storage().get_clients(user_id)}
 
 
@@ -1454,7 +1565,7 @@ async def add_daily_goal(body: DailyGoalRequest, req: Request, date: Optional[st
     if is_in_coach_view(req):
         storage = get_storage()
         client = storage.get_user_by_id(user_id)
-        coach = storage.get_user_by_id(int(req.session["user_id"]))
+        coach = storage.get_user_by_id(get_auth_user_id(req))
         if client and coach and client.get("email"):
             goal_date = (dt or datetime.now()).strftime("%Y-%m-%d")
             notify_goal_added(
@@ -1481,7 +1592,7 @@ async def complete_daily_goal(goal_id: int, body: DailyGoalCompleteRequest, req:
     """Toggle completion. Owner only — coaches cannot mark complete."""
     if is_in_coach_view(req):
         raise HTTPException(403, "Coaches cannot mark goals complete")
-    user_id = int(req.session["user_id"])
+    user_id = get_auth_user_id(req)
     goal = get_storage().set_daily_goal_completed(goal_id, user_id, body.completed)
     if not goal:
         raise HTTPException(404, "Goal not found")
@@ -1507,7 +1618,7 @@ async def delete_daily_goal(goal_id: int, req: Request):
     """Delete goal. Owner only."""
     if is_in_coach_view(req):
         raise HTTPException(403, "Coaches cannot delete goals")
-    user_id = int(req.session["user_id"])
+    user_id = get_auth_user_id(req)
     if not get_storage().delete_daily_goal(goal_id, user_id):
         raise HTTPException(404, "Goal not found")
     return {"message": "Goal deleted"}
@@ -1839,7 +1950,7 @@ Return ONLY the dictionary, no other text.
 """
 
     try:
-        model_name = 'gemini-2.0-flash'
+        model_name = default_gemini_model
         start_time = time.time()
         response = client.models.generate_content(
             model=model_name,
@@ -2148,9 +2259,16 @@ async def fitbit_status(request: Request):
     available = _fitbit_available()
     if not available:
         return {"available": False, "connected": False}
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     tokens = get_storage().get_fitbit_tokens(user_id)
-    return {"available": True, "connected": tokens is not None}
+    if not tokens:
+        return {"available": True, "connected": False}
+    return {
+        "available": True,
+        "connected": True,
+        "last_sync_at": tokens["last_sync_at"].isoformat() if tokens.get("last_sync_at") else None,
+        "last_sync_attempt_at": tokens["last_sync_attempt_at"].isoformat() if tokens.get("last_sync_attempt_at") else None,
+    }
 
 
 @app.get("/auth/fitbit")
@@ -2170,21 +2288,29 @@ async def fitbit_callback(request: Request):
     try:
         token = await oauth.fitbit.authorize_access_token(request)
     except Exception as e:
-        print(f"[fitbit] Token exchange failed: {e}")
+        logger.error(f"[fitbit] Token exchange failed: {e}")
         raise HTTPException(500, f"Fitbit token exchange failed: {e}")
     if "access_token" not in token:
-        print(f"[fitbit] Unexpected token response: {token}")
+        logger.error(f"[fitbit] Unexpected token response: {token}")
         raise HTTPException(500, "Fitbit did not return an access token")
     user_id = request.session.get("user_id")
     if not user_id:
         return RedirectResponse(url="/login", status_code=303)
+    uid = int(user_id)
+    expires_at = int(token.get("expires_at", time.time() + token.get("expires_in", 28800)))
     get_storage().save_fitbit_tokens(
-        user_id=int(user_id),
+        user_id=uid,
         fitbit_user_id=token.get("user_id", ""),
         access_token=token["access_token"],
         refresh_token=token["refresh_token"],
-        expires_at=int(token.get("expires_at", time.time() + token.get("expires_in", 28800))),
+        expires_at=expires_at,
     )
+    # Sync weight immediately on connect
+    await _sync_fitbit_user(uid, {
+        "access_token": token["access_token"],
+        "refresh_token": token["refresh_token"],
+        "expires_at": expires_at,
+    })
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -2192,9 +2318,103 @@ async def fitbit_callback(request: Request):
 async def fitbit_disconnect(request: Request):
     if is_in_coach_view(request):
         raise HTTPException(403, "Cannot disconnect Fitbit in coach view")
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     get_storage().delete_fitbit_tokens(user_id)
     return {"message": "Fitbit disconnected"}
+
+
+async def _sync_fitbit_user(user_id: int, tokens: dict, days: int = 30) -> int:
+    """Fetch weight, steps, calories, and heart rate from Fitbit. Returns number of weight entries synced."""
+    # Refresh if expired
+    if tokens["expires_at"] < int(time.time()):
+        tokens = await _refresh_fitbit_token(user_id, tokens)
+        if not tokens:
+            get_storage().update_fitbit_sync_times(user_id, synced=False)
+            return 0
+
+    today = datetime.now().date()
+    start = today - timedelta(days=days)
+
+    async def _get(client, url):
+        """GET with 401-retry logic."""
+        nonlocal tokens
+        if not tokens:
+            return None
+        resp = await client.get(url, headers={"Authorization": f"Bearer {tokens['access_token']}"})
+        if resp.status_code == 401:
+            tokens = await _refresh_fitbit_token(user_id, tokens)
+            if not tokens:
+                return None
+            resp = await client.get(url, headers={"Authorization": f"Bearer {tokens['access_token']}"})
+        if resp.status_code != 200:
+            logger.warning(f"[fitbit-sync] {url.split('/')[-1]} returned {resp.status_code} for user {user_id}")
+            return None
+        return resp
+
+    async with httpx.AsyncClient() as client:
+        # 1. Weight
+        weight_resp = await _get(client, f"https://api.fitbit.com/1/user/-/body/log/weight/date/{start.isoformat()}/{today.isoformat()}.json")
+        # 2. Steps
+        steps_resp = await _get(client, f"https://api.fitbit.com/1/user/-/activities/steps/date/{start.isoformat()}/{today.isoformat()}.json")
+        # 3. Calories burned
+        cals_resp = await _get(client, f"https://api.fitbit.com/1/user/-/activities/calories/date/{start.isoformat()}/{today.isoformat()}.json")
+        # 4. Heart rate
+        hr_resp = await _get(client, f"https://api.fitbit.com/1/user/-/activities/heart/date/{start.isoformat()}/{today.isoformat()}.json")
+
+    if not tokens:
+        get_storage().update_fitbit_sync_times(user_id, synced=False)
+        return 0
+
+    storage = get_storage()
+
+    # Process weight
+    synced = 0
+    if weight_resp:
+        for entry in weight_resp.json().get("weight", []):
+            weight_kg = entry.get("weight")
+            date_str = entry.get("date")
+            if weight_kg is None or not date_str:
+                continue
+            weight_lbs = round(weight_kg * 2.20462, 1)
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            storage.set_weight(user_id, weight_lbs, dt)
+            synced += 1
+
+    # Build per-date stats from steps, calories, heart rate
+    stats_by_date = {}
+
+    if steps_resp:
+        for entry in steps_resp.json().get("activities-steps", []):
+            d = entry.get("dateTime")
+            v = int(entry.get("value", 0))
+            if d and v > 0:
+                stats_by_date.setdefault(d, {})["steps"] = v
+
+    if cals_resp:
+        for entry in cals_resp.json().get("activities-calories", []):
+            d = entry.get("dateTime")
+            v = int(entry.get("value", 0))
+            if d and v > 0:
+                stats_by_date.setdefault(d, {})["calories_burned"] = v
+
+    if hr_resp:
+        for entry in hr_resp.json().get("activities-heart", []):
+            d = entry.get("dateTime")
+            rhr = entry.get("value", {}).get("restingHeartRate")
+            if d and rhr:
+                stats_by_date.setdefault(d, {})["resting_heart_rate"] = int(rhr)
+
+    for date_str, vals in stats_by_date.items():
+        storage.upsert_fitbit_daily_stats(
+            user_id, date_str,
+            steps=vals.get("steps"),
+            calories_burned=vals.get("calories_burned"),
+            resting_heart_rate=vals.get("resting_heart_rate"),
+        )
+
+    any_data = synced > 0 or len(stats_by_date) > 0
+    storage.update_fitbit_sync_times(user_id, synced=any_data)
+    return synced, any_data
 
 
 @app.post("/api/fitbit/sync")
@@ -2203,53 +2423,31 @@ async def fitbit_sync(request: Request):
         raise HTTPException(400, "Fitbit integration not configured")
     if is_in_coach_view(request):
         raise HTTPException(403, "Cannot sync Fitbit in coach view")
-    user_id = int(request.session["user_id"])
+    user_id = get_auth_user_id(request)
     tokens = get_storage().get_fitbit_tokens(user_id)
     if not tokens:
         raise HTTPException(400, "Fitbit not connected")
 
-    # Refresh if expired
-    if tokens["expires_at"] < int(time.time()):
-        tokens = await _refresh_fitbit_token(user_id, tokens)
-        if not tokens:
-            raise HTTPException(400, "Fitbit token expired. Please reconnect.")
-
-    # Fetch last 30 days of weight
-    today = datetime.now().date()
-    start = today - timedelta(days=30)
-    url = f"https://api.fitbit.com/1/user/-/body/log/weight/date/{start.isoformat()}/{today.isoformat()}.json"
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            url,
-            headers={"Authorization": f"Bearer {tokens['access_token']}"},
-        )
-        if resp.status_code == 401:
-            tokens = await _refresh_fitbit_token(user_id, tokens)
-            if not tokens:
-                raise HTTPException(400, "Fitbit token expired. Please reconnect.")
-            resp = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {tokens['access_token']}"},
-            )
-        if resp.status_code != 200:
-            raise HTTPException(502, "Failed to fetch weight from Fitbit")
-
-    data = resp.json()
-    entries = data.get("weight", [])
-    storage = get_storage()
-    synced = 0
-    for entry in entries:
-        weight_kg = entry.get("weight")
-        date_str = entry.get("date")
-        if weight_kg is None or not date_str:
-            continue
-        weight_lbs = round(weight_kg * 2.20462, 1)
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        storage.set_weight(user_id, weight_lbs, dt)
-        synced += 1
-
+    synced, _ = await _sync_fitbit_user(user_id, tokens)
     return {"message": f"Synced {synced} weight entries from Fitbit", "synced": synced}
+
+
+@app.get("/api/fitbit/daily-stats")
+async def fitbit_daily_stats(request: Request, date: str = ""):
+    user_id = get_effective_user_id(request)
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    stats = get_storage().get_fitbit_daily_stats(user_id, date)
+    if not stats:
+        return {"steps": None, "calories_burned": None, "resting_heart_rate": None}
+    return stats
+
+
+@app.get("/api/fitbit/stats-history")
+async def fitbit_stats_history(request: Request, days: Optional[int] = None):
+    user_id = get_effective_user_id(request)
+    history = get_storage().get_fitbit_stats_history(user_id, days)
+    return {"history": history}
 
 
 def create_app():
